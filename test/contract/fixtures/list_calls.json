@@ -1,0 +1,14 @@
+{
+  "calls": [
+    {
+      "id": "session-1",
+      "call_type": "websocket",
+      "created_at": "2026-03-05T12:34:56+00:00",
+      "option": {
+        "offer": "v=0",
+        "caller": "1001",
+        "callee": "1002"
+      }
+    }
+  ]
+}

@@ -55,9 +55,7 @@ func Default() *Config {
 		LLMProxy: LLMProxyConfig{
 			Endpoint: "https://api.openai.com/v1",
 		},
-		ICEServers: []wsproto.ICEServer{{
-			URLs: []string{"stun:stun.l.google.com:19302"},
-		}},
+		ICEServers: nil,
 	}
 }
 

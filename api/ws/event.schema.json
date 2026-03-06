@@ -1,13 +1,153 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "WS Event",
-  "type": "object",
-  "required": ["event"],
-  "properties": {
-    "event": { "type": "string" },
-    "trackId": { "type": "string" },
-    "timestamp": { "type": "integer" },
-    "sdp": { "type": "string" },
-    "text": { "type": "string" }
-  }
+  "title": "compatibility WS Event",
+  "description": "Binary websocket frames are part of the protocol but are not represented by this JSON schema.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "trackId", "timestamp", "sdp"],
+      "properties": {
+        "event": { "const": "answer" },
+        "trackId": { "type": "string" },
+        "timestamp": { "type": "integer" },
+        "sdp": { "type": "string" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "trackId", "timestamp", "reason"],
+      "properties": {
+        "event": { "const": "reject" },
+        "trackId": { "type": "string" },
+        "timestamp": { "type": "integer" },
+        "reason": { "type": "string" },
+        "code": { "type": "integer", "minimum": 0 }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "trackId", "timestamp", "earlyMedia"],
+      "properties": {
+        "event": { "const": "ringing" },
+        "trackId": { "type": "string" },
+        "timestamp": { "type": "integer" },
+        "earlyMedia": { "type": "boolean" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "timestamp"],
+      "properties": {
+        "event": { "const": "hangup" },
+        "timestamp": { "type": "integer" },
+        "reason": { "type": "string" },
+        "initiator": { "type": "string" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "trackId", "timestamp"],
+      "properties": {
+        "event": { "enum": ["trackStart", "incoming"] },
+        "trackId": { "type": "string" },
+        "timestamp": { "type": "integer" },
+        "caller": { "type": "string" },
+        "callee": { "type": "string" },
+        "sdp": { "type": "string" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "trackId", "timestamp", "duration"],
+      "properties": {
+        "event": { "const": "trackEnd" },
+        "trackId": { "type": "string" },
+        "timestamp": { "type": "integer" },
+        "duration": { "type": "integer", "minimum": 0 }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "trackId", "timestamp", "position"],
+      "properties": {
+        "event": { "const": "interruption" },
+        "trackId": { "type": "string" },
+        "timestamp": { "type": "integer" },
+        "position": { "type": "integer", "minimum": 0 }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "trackId", "timestamp", "index", "text"],
+      "properties": {
+        "event": { "enum": ["asrFinal", "asrDelta"] },
+        "trackId": { "type": "string" },
+        "timestamp": { "type": "integer" },
+        "index": { "type": "integer", "minimum": 0 },
+        "startTime": { "type": "integer" },
+        "endTime": { "type": "integer" },
+        "text": { "type": "string" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "timestamp", "key", "duration", "data"],
+      "properties": {
+        "event": { "const": "metrics" },
+        "timestamp": { "type": "integer" },
+        "key": { "type": "string" },
+        "duration": { "type": "integer", "minimum": 0 },
+        "data": {}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "trackId", "timestamp", "sender", "error"],
+      "properties": {
+        "event": { "const": "error" },
+        "trackId": { "type": "string" },
+        "timestamp": { "type": "integer" },
+        "sender": { "type": "string" },
+        "error": { "type": "string" },
+        "code": { "type": "integer", "minimum": 0 }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "timestamp", "speaker", "text"],
+      "properties": {
+        "event": { "const": "addHistory" },
+        "sender": { "type": "string" },
+        "timestamp": { "type": "integer" },
+        "speaker": { "type": "string" },
+        "text": { "type": "string" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "trackId", "timestamp", "sender"],
+      "properties": {
+        "event": { "const": "other" },
+        "trackId": { "type": "string" },
+        "timestamp": { "type": "integer" },
+        "sender": { "type": "string" },
+        "extra": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    }
+  ]
 }

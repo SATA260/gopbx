@@ -1,6 +1,26 @@
 {
   "command": "invite",
   "option": {
-    "offer": "v=0"
+    "offer": "v=0",
+    "caller": "1001",
+    "callee": "1002",
+    "denoise": true,
+    "asr": {
+      "provider": "tencent",
+      "appId": "app-1",
+      "secretId": "secret-id",
+      "secretKey": "secret-key",
+      "language": "zh-CN"
+    },
+    "tts": {
+      "provider": "tencent",
+      "speaker": "speaker-1",
+      "appId": "app-1",
+      "secretId": "secret-id",
+      "secretKey": "secret-key",
+      "speed": 1,
+      "volume": 5
+    },
+    "codec": "pcmu"
   }
 }

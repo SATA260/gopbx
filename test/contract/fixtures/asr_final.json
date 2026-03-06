@@ -1,5 +1,9 @@
 {
   "event": "asrFinal",
   "trackId": "session-1",
+  "timestamp": 1711111112222,
+  "index": 3,
+  "startTime": 1711111111000,
+  "endTime": 1711111112200,
   "text": "hello"
 }

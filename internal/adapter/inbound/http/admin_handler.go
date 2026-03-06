@@ -2,13 +2,41 @@
 
 package httpinbound
 
-import "github.com/labstack/echo/v4"
+import (
+	"gopbx/pkg/wsproto"
+
+	"github.com/labstack/echo/v4"
+)
+
+type listCallsResponse struct {
+	Calls []listCallItem `json:"calls"`
+}
+
+type listCallItem struct {
+	ID        string             `json:"id"`
+	CallType  string             `json:"call_type"`
+	CreatedAt string             `json:"created_at"`
+	Option    *sessionCallOption `json:"option"`
+}
+
+type sessionCallOption = wsproto.CallOption
 
 func (h *Handlers) HandleListCalls(c echo.Context) error {
-	return c.JSON(200, map[string]any{"calls": h.Sessions.List()})
+	summaries := h.Sessions.List()
+	items := make([]listCallItem, 0, len(summaries))
+	for _, summary := range summaries {
+		items = append(items, listCallItem{
+			ID:        summary.ID,
+			CallType:  summary.CallType,
+			CreatedAt: summary.CreatedAt.UTC().Format("2006-01-02T15:04:05-07:00"),
+			Option:    (*sessionCallOption)(summary.Option),
+		})
+	}
+	return c.JSON(200, listCallsResponse{Calls: items})
 }
 
 func (h *Handlers) HandleKillCall(c echo.Context) error {
 	id := c.Param("id")
-	return c.JSON(200, h.Sessions.Kill(id))
+	h.Sessions.Kill(id)
+	return c.JSON(200, true)
 }

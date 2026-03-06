@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: gopbx admin api
+  title: gopbx compatibility api
   version: 0.1.0
 paths:
   /call/lists:
@@ -8,7 +8,11 @@ paths:
       summary: List active calls
       responses:
         '200':
-          description: OK
+          description: Active calls list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CallListResponse'
   /call/kill/{id}:
     post:
       summary: Kill a call by id
@@ -20,10 +24,152 @@ paths:
             type: string
       responses:
         '200':
-          description: OK
+          description: Always returns true for compatibility
+          content:
+            application/json:
+              schema:
+                type: boolean
+                example: true
   /iceservers:
     get:
       summary: Get ICE servers
       responses:
         '200':
-          description: OK
+          description: ICE server list or null
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ICEServersResponse'
+  /llm/v1/{path}:
+    post:
+      summary: Proxy llm request
+      parameters:
+        - in: path
+          name: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Upstream streaming or non-streaming passthrough
+components:
+  schemas:
+    CallListResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - calls
+      properties:
+        calls:
+          type: array
+          items:
+            $ref: '#/components/schemas/CallSummary'
+    CallSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - call_type
+        - created_at
+        - option
+      properties:
+        id:
+          type: string
+        call_type:
+          type: string
+          enum:
+            - webrtc
+            - websocket
+            - sip
+        created_at:
+          type: string
+          example: '2026-03-05T12:34:56+00:00'
+        option:
+          $ref: '#/components/schemas/CallOption'
+    CallOption:
+      type: object
+      additionalProperties: false
+      properties:
+        denoise:
+          type: boolean
+        offer:
+          type: string
+        callee:
+          type: string
+        caller:
+          type: string
+        recorder:
+          type: object
+          additionalProperties: true
+        vad:
+          type: object
+          additionalProperties: true
+        asr:
+          type: object
+          additionalProperties: true
+        tts:
+          type: object
+          additionalProperties: true
+        handshakeTimeout:
+          type: string
+        enableIpv6:
+          type: boolean
+        extra:
+          type: object
+          additionalProperties:
+            type: string
+        codec:
+          type: string
+        eou:
+          type: object
+          additionalProperties: true
+    IceServerPassword:
+      type: object
+      additionalProperties: false
+      required:
+        - urls
+      properties:
+        urls:
+          type: array
+          items:
+            type: string
+        username:
+          type: string
+        password:
+          type: string
+    IceServerCredential:
+      type: object
+      additionalProperties: false
+      required:
+        - urls
+      properties:
+        urls:
+          type: array
+          items:
+            type: string
+        username:
+          type: string
+        credential:
+          type: string
+    IceServerMinimal:
+      type: object
+      additionalProperties: false
+      required:
+        - urls
+      properties:
+        urls:
+          type: array
+          items:
+            type: string
+    ICEServersResponse:
+      nullable: true
+      oneOf:
+        - type: array
+          items:
+            $ref: '#/components/schemas/IceServerPassword'
+        - type: array
+          items:
+            $ref: '#/components/schemas/IceServerCredential'
+        - type: array
+          items:
+            $ref: '#/components/schemas/IceServerMinimal'

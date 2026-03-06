@@ -23,7 +23,7 @@ func DecodeCommand(message []byte) (*wsproto.CommandEnvelope, error) {
 
 func ValidateFirstCommand(cmd *wsproto.CommandEnvelope) error {
 	if !compat.IsFirstCommandAllowed(cmd.Command) {
-		return fmt.Errorf("first command must be invite or accept")
+		return fmt.Errorf("the first message must be an invite")
 	}
 	return nil
 }

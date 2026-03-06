@@ -1,12 +1,174 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "WS Command",
-  "type": "object",
-  "required": ["command"],
-  "properties": {
-    "command": { "type": "string" },
-    "option": { "type": "object" },
-    "text": { "type": "string" },
-    "playId": { "type": "string" }
+  "title": "compatibility WS Command",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "option"],
+      "properties": {
+        "command": { "const": "invite" },
+        "option": { "$ref": "#/$defs/callOption" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "option"],
+      "properties": {
+        "command": { "const": "accept" },
+        "option": { "$ref": "#/$defs/callOption" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "reason"],
+      "properties": {
+        "command": { "const": "reject" },
+        "reason": { "type": "string" },
+        "code": { "type": "integer", "minimum": 0 }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "candidates"],
+      "properties": {
+        "command": { "const": "candidate" },
+        "candidates": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "text"],
+      "properties": {
+        "command": { "const": "tts" },
+        "text": { "type": "string" },
+        "speaker": { "type": "string" },
+        "playId": { "type": "string" },
+        "autoHangup": { "type": "boolean" },
+        "streaming": { "type": "boolean" },
+        "endOfStream": { "type": "boolean" },
+        "option": { "$ref": "#/$defs/synthesisOption" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "url"],
+      "properties": {
+        "command": { "const": "play" },
+        "url": { "type": "string" },
+        "autoHangup": { "type": "boolean" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": { "enum": ["interrupt", "pause", "resume"] }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": { "const": "hangup" },
+        "reason": { "type": "string" },
+        "initiator": { "type": "string" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "target"],
+      "properties": {
+        "command": { "const": "refer" },
+        "target": { "type": "string" },
+        "options": { "$ref": "#/$defs/referOption" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": { "enum": ["mute", "unmute"] },
+        "trackId": { "type": "string" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "speaker", "text"],
+      "properties": {
+        "command": { "const": "history" },
+        "speaker": { "type": "string" },
+        "text": { "type": "string" }
+      }
+    }
+  ],
+  "$defs": {
+    "callOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "denoise": { "type": "boolean" },
+        "offer": { "type": "string" },
+        "callee": { "type": "string" },
+        "caller": { "type": "string" },
+        "recorder": { "type": "object", "additionalProperties": true },
+        "vad": { "type": "object", "additionalProperties": true },
+        "asr": { "type": "object", "additionalProperties": true },
+        "tts": { "$ref": "#/$defs/synthesisOption" },
+        "handshakeTimeout": { "type": "string" },
+        "enableIpv6": { "type": "boolean" },
+        "extra": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "codec": { "type": "string" },
+        "eou": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "synthesisOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "samplerate": { "type": "integer" },
+        "provider": { "type": "string" },
+        "speed": { "type": "number" },
+        "appId": { "type": "string" },
+        "secretId": { "type": "string" },
+        "secretKey": { "type": "string" },
+        "volume": { "type": "integer" },
+        "speaker": { "type": "string" },
+        "codec": { "type": "string" },
+        "subtitle": { "type": "boolean" },
+        "emotion": { "type": "string" },
+        "endpoint": { "type": "string" },
+        "extra": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "referOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bypass": { "type": "boolean" },
+        "timeout": { "type": "integer", "minimum": 0 },
+        "moh": { "type": "string" },
+        "autoHangup": { "type": "boolean" }
+      }
+    }
   }
 }

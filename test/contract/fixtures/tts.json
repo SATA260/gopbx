@@ -1,5 +1,15 @@
 {
   "command": "tts",
   "text": "hello",
-  "playId": "p1"
+  "speaker": "speaker-1",
+  "playId": "p1",
+  "autoHangup": false,
+  "streaming": false,
+  "endOfStream": true,
+  "option": {
+    "provider": "tencent",
+    "speaker": "speaker-1",
+    "speed": 1,
+    "volume": 5
+  }
 }

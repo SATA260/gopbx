@@ -1,5 +1,6 @@
 {
   "event": "answer",
   "trackId": "session-1",
+  "timestamp": 1711111111111,
   "sdp": "v=0"
 }

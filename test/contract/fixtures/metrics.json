@@ -1,5 +1,10 @@
 {
   "event": "metrics",
+  "timestamp": 1711111113333,
   "key": "ttfb.tts.mock",
-  "duration": 0
+  "duration": 0,
+  "data": {
+    "playId": "p1",
+    "length": 0
+  }
 }

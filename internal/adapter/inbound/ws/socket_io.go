@@ -5,7 +5,6 @@ package wsinbound
 import (
 	"github.com/gorilla/websocket"
 
-	"gopbx/internal/compat"
 	"gopbx/pkg/wsproto"
 )
 
@@ -21,6 +20,6 @@ func WriteBinary(conn *websocket.Conn, payload []byte) error {
 	return conn.WriteMessage(websocket.BinaryMessage, payload)
 }
 
-func WriteError(conn *websocket.Conn, message string) error {
-	return WriteEvent(conn, wsproto.EventEnvelope{Event: compat.EventError, Message: message})
+func WriteError(conn *websocket.Conn, trackID, sender, message string) error {
+	return WriteEvent(conn, wsproto.NewErrorEvent(trackID, sender, message))
 }

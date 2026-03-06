@@ -1,0 +1,7 @@
+{
+  "event": "error",
+  "trackId": "session-1",
+  "timestamp": 1711111114444,
+  "sender": "handle_call",
+  "error": "the first message must be an invite"
+}

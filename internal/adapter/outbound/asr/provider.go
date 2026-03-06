@@ -2,8 +2,6 @@
 
 package asr
 
-import "fmt"
-
 const ProviderAliyun = "aliyun"
 
 type Provider interface {
@@ -11,8 +9,5 @@ type Provider interface {
 }
 
 func ValidateProvider(name string) error {
-	if name == "" || name == ProviderAliyun {
-		return nil
-	}
-	return fmt.Errorf("unsupported asr provider: %s", name)
+	return nil
 }
