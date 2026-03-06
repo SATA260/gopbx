@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WS Command",
+  "type": "object",
+  "required": ["command"],
+  "properties": {
+    "command": { "type": "string" },
+    "option": { "type": "object" },
+    "text": { "type": "string" },
+    "playId": { "type": "string" }
+  }
+}

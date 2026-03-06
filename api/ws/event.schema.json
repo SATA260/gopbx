@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WS Event",
+  "type": "object",
+  "required": ["event"],
+  "properties": {
+    "event": { "type": "string" },
+    "trackId": { "type": "string" },
+    "timestamp": { "type": "integer" },
+    "sdp": { "type": "string" },
+    "text": { "type": "string" }
+  }
+}

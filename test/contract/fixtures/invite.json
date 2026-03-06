@@ -1,0 +1,6 @@
+{
+  "command": "invite",
+  "option": {
+    "offer": "v=0"
+  }
+}

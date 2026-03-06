@@ -1,0 +1,11 @@
+server:
+  address: ":8080"
+  shutdownTimeout: "10s"
+
+llmProxy:
+  endpoint: "https://api.openai.com"
+  apiKey: ""
+
+iceServers:
+  - urls:
+      - "stun:stun.l.google.com:19302"

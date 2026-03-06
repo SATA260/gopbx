@@ -1,0 +1,9 @@
+version: "3.9"
+services:
+  gopbx:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile
+    ports:
+      - "8080:8080"
+    command: ["/app/gopbx", "-config", "/app/configs/config.dev.yaml"]

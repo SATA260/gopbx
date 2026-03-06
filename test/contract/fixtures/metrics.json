@@ -1,0 +1,5 @@
+{
+  "event": "metrics",
+  "key": "ttfb.tts.mock",
+  "duration": 0
+}

@@ -1,0 +1,29 @@
+openapi: 3.0.3
+info:
+  title: gopbx admin api
+  version: 0.1.0
+paths:
+  /call/lists:
+    get:
+      summary: List active calls
+      responses:
+        '200':
+          description: OK
+  /call/kill/{id}:
+    post:
+      summary: Kill a call by id
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+  /iceservers:
+    get:
+      summary: Get ICE servers
+      responses:
+        '200':
+          description: OK
