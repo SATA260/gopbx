@@ -1,6 +1,8 @@
 # gopbx
 
-`gopbx` 是一个基于 Echo 的实时语音交互系统
+`gopbx` 是一个基于 Echo 的实时语音交互系统。
+
+当前配置管理使用 `koanf`，并且所有运行参数统一从环境变量读取。
 
 当前骨架已包含：
 
@@ -13,5 +15,16 @@
 启动示例：
 
 ```bash
-go run ./cmd/gateway -config configs/config.dev.yaml
+set -a
+source configs/gopbx.env.example
+set +a
+go run ./cmd/gateway
 ```
+
+核心环境变量：
+
+- `GOPBX_SERVER__ADDRESS`：服务监听地址
+- `GOPBX_SERVER__SHUTDOWN_TIMEOUT`：优雅停机超时
+- `GOPBX_LLM_PROXY__ENDPOINT`：LLM 上游地址
+- `GOPBX_LLM_PROXY__API_KEY`：LLM 上游密钥
+- `GOPBX_ICE_SERVERS`：ICE Server JSON 数组

@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -15,10 +14,7 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "configs/config.dev.yaml", "path to config file")
-	flag.Parse()
-
-	cfg, err := config.Load(*configPath)
+	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}

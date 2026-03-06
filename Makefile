@@ -1,10 +1,10 @@
 APP_NAME := gopbx
-CONFIG ?= configs/config.dev.yaml
+ENV_FILE ?= configs/gopbx.env.example
 
 .PHONY: run fmt test tidy
 
 run:
-	go run ./cmd/gateway -config $(CONFIG)
+	set -a && . $(ENV_FILE) && set +a && go run ./cmd/gateway
 
 fmt:
 	gofmt -w ./cmd ./internal ./pkg ./sdk ./test

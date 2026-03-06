@@ -6,4 +6,10 @@ services:
       dockerfile: deployments/docker/Dockerfile
     ports:
       - "8080:8080"
-    command: ["/app/gopbx", "-config", "/app/configs/config.dev.yaml"]
+    environment:
+      GOPBX_SERVER__ADDRESS: ":8080"
+      GOPBX_SERVER__SHUTDOWN_TIMEOUT: "10s"
+      GOPBX_LLM_PROXY__ENDPOINT: "https://api.openai.com/v1"
+      GOPBX_LLM_PROXY__API_KEY: ""
+      GOPBX_ICE_SERVERS: '[{"urls":["stun:stun.l.google.com:19302"]}]'
+    command: ["/app/gopbx"]

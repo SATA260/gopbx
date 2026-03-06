@@ -1,25 +1,33 @@
-// 这个文件定义配置模型与加载逻辑，负责把 YAML 配置转成业务可用对象。
+// 这个文件定义配置模型与加载逻辑，负责用 koanf 把环境变量配置转成业务可用对象。
 
 package config
 
 import (
-	"os"
+	"encoding/json"
+	"strings"
 	"time"
 
 	"gopbx/pkg/wsproto"
 
-	"gopkg.in/yaml.v3"
+	"github.com/knadh/koanf/providers/env"
+	"github.com/knadh/koanf/v2"
 )
 
 type Config struct {
-	Server     ServerConfig        `yaml:"server"`
-	LLMProxy   LLMProxyConfig      `yaml:"llmProxy"`
-	ICEServers []wsproto.ICEServer `yaml:"iceServers"`
+	Server     ServerConfig
+	LLMProxy   LLMProxyConfig
+	ICEServers []wsproto.ICEServer
+}
+
+type rawConfig struct {
+	Server     ServerConfig   `koanf:"server"`
+	LLMProxy   LLMProxyConfig `koanf:"llm_proxy"`
+	ICEServers string         `koanf:"ice_servers"`
 }
 
 type ServerConfig struct {
-	Address         string `yaml:"address"`
-	ShutdownTimeout string `yaml:"shutdownTimeout"`
+	Address         string `koanf:"address"`
+	ShutdownTimeout string `koanf:"shutdown_timeout"`
 }
 
 func (c ServerConfig) ShutdownTimeoutDuration() time.Duration {
@@ -34,8 +42,8 @@ func (c ServerConfig) ShutdownTimeoutDuration() time.Duration {
 }
 
 type LLMProxyConfig struct {
-	Endpoint string `yaml:"endpoint"`
-	APIKey   string `yaml:"apiKey"`
+	Endpoint string `koanf:"endpoint"`
+	APIKey   string `koanf:"api_key"`
 }
 
 func Default() *Config {
@@ -45,7 +53,7 @@ func Default() *Config {
 			ShutdownTimeout: "10s",
 		},
 		LLMProxy: LLMProxyConfig{
-			Endpoint: "https://api.openai.com",
+			Endpoint: "https://api.openai.com/v1",
 		},
 		ICEServers: []wsproto.ICEServer{{
 			URLs: []string{"stun:stun.l.google.com:19302"},
@@ -53,20 +61,45 @@ func Default() *Config {
 	}
 }
 
-func Load(path string) (*Config, error) {
-	if path == "" {
-		cfg := Default()
-		return cfg, cfg.Validate()
-	}
+func Load() (*Config, error) {
+	defaults := Default()
+	k := koanf.New(".")
 
-	data, err := os.ReadFile(path)
+	err := k.Load(env.Provider("GOPBX_", ".", func(s string) string {
+		key := strings.TrimPrefix(s, "GOPBX_")
+		key = strings.ToLower(key)
+		key = strings.ReplaceAll(key, "__", ".")
+		return key
+	}), nil)
 	if err != nil {
 		return nil, err
 	}
 
-	cfg := Default()
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	raw := rawConfig{
+		Server:   defaults.Server,
+		LLMProxy: defaults.LLMProxy,
+	}
+	if len(defaults.ICEServers) > 0 {
+		data, err := json.Marshal(defaults.ICEServers)
+		if err != nil {
+			return nil, err
+		}
+		raw.ICEServers = string(data)
+	}
+
+	if err := k.Unmarshal("", &raw); err != nil {
 		return nil, err
+	}
+
+	cfg := &Config{
+		Server:   raw.Server,
+		LLMProxy: raw.LLMProxy,
+	}
+
+	if raw.ICEServers != "" {
+		if err := json.Unmarshal([]byte(raw.ICEServers), &cfg.ICEServers); err != nil {
+			return nil, err
+		}
 	}
 
 	return cfg, cfg.Validate()
