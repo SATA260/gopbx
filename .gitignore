@@ -1,0 +1,41 @@
+# Go build outputs
+/bin/
+/build/
+/dist/
+/tmp/
+/*.exe
+/*.exe~
+/*.dll
+/*.so
+/*.dylib
+/*.test
+
+# Coverage reports
+/coverage/
+coverage.out
+cover.out
+*.coverprofile
+
+# Logs
+*.log
+/logs/
+
+# Environment and local overrides
+.env
+.env.*
+!.env.example
+configs/*.env
+configs/*.env.local
+!configs/*.env.example
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Temporary debug files
+*.tmp
+*.bak
