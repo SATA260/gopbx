@@ -6,16 +6,19 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	wsinbound "gopbx/internal/adapter/inbound/ws"
 	asroutbound "gopbx/internal/adapter/outbound/asr"
 	llmoutbound "gopbx/internal/adapter/outbound/llm"
 	ttsoutbound "gopbx/internal/adapter/outbound/tts"
+	"gopbx/internal/app/callrecord"
 	"gopbx/internal/app/session"
 	"gopbx/internal/compat"
 	"gopbx/internal/config"
 	"gopbx/pkg/wsproto"
 
+	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 )
 
@@ -55,47 +58,66 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 	if sessionID == "" {
 		sessionID = newSessionID()
 	}
+	dumpEnabled := parseDumpFlag(c.QueryParam("dump"))
+	dumpWriter := openDumpWriter(h.Config.RecorderPath, sessionID, dumpEnabled)
+	defer closeDumpWriter(dumpWriter)
+
+	var activeSession *session.Session
+	closeInfo := session.CloseInfo{Cause: session.CloseCauseDisconnect}
+	defer func() {
+		if activeSession != nil {
+			session.Cleanup(h.Sessions, activeSession, closeInfo)
+		}
+	}()
 
 	messageType, firstMessage, err := conn.ReadMessage()
 	if err != nil {
 		return nil
 	}
 	if messageType != 1 {
-		_ = wsinbound.WriteError(conn, sessionID, "handle_call", "Invalid message type")
+		_ = writeError(conn, dumpWriter, sessionID, "handle_call", "Invalid message type")
 		return nil
 	}
 
 	cmd, err := wsinbound.DecodeCommand(firstMessage)
 	if err != nil {
-		_ = wsinbound.WriteError(conn, sessionID, "handle_call", err.Error())
+		_ = writeError(conn, dumpWriter, sessionID, "handle_call", err.Error())
 		return nil
 	}
+	_ = dumpWriter.WriteCommand(firstMessage)
 	if err := wsinbound.ValidateFirstCommand(cmd); err != nil {
-		_ = wsinbound.WriteError(conn, sessionID, "handle_call", err.Error())
+		_ = writeError(conn, dumpWriter, sessionID, "handle_call", err.Error())
 		return nil
 	}
 	callOption, err := cmd.CallOption()
 	if err != nil {
-		_ = wsinbound.WriteError(conn, sessionID, "handle_call", err.Error())
+		_ = writeError(conn, dumpWriter, sessionID, "handle_call", err.Error())
 		return nil
 	}
 	if err := validateProviders(callOption); err != nil {
-		_ = wsinbound.WriteError(conn, sessionID, "handle_call", err.Error())
+		_ = writeError(conn, dumpWriter, sessionID, "handle_call", err.Error())
 		return nil
 	}
 
-	s := h.Sessions.Create(sessionID, callType, callOption)
-	defer session.Cleanup(h.Sessions, s.ID)
+	activeSession = h.Sessions.Create(sessionID, callType, callOption)
+	activeSession.SetDumpEnabled(dumpEnabled)
+	activeSession.BeginHandshake(callOption)
+	activeSession.BindCloseFunc(func() {
+		_ = conn.Close()
+	})
 
 	answer := wsproto.EventEnvelope{
 		Event:     compat.EventAnswer,
-		TrackID:   s.ID,
+		TrackID:   activeSession.ID,
 		Timestamp: wsproto.NowMillis(),
 		SDP:       buildAnswerSDP(callType, callOption),
 	}
-	if err := wsinbound.WriteEvent(conn, answer); err != nil {
+	if err := writeEvent(conn, dumpWriter, answer); err != nil {
+		closeInfo = session.CloseInfo{Cause: session.CloseCauseError, Err: err.Error()}
+		activeSession.Fail(err.Error())
 		return nil
 	}
+	activeSession.MarkActive()
 
 	for {
 		messageType, payload, err := conn.ReadMessage()
@@ -109,16 +131,28 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 
 		command, err := wsinbound.DecodeCommand(payload)
 		if err != nil {
-			continue
+			_ = writeError(conn, dumpWriter, activeSession.ID, "handle_call", err.Error())
+			closeInfo = session.CloseInfo{Cause: session.CloseCauseError, Err: err.Error()}
+			activeSession.Fail(err.Error())
+			return nil
 		}
+		_ = dumpWriter.WriteCommand(payload)
 
-		for _, evt := range h.Router.Route(s, command) {
-			if err := wsinbound.WriteEvent(conn, evt); err != nil {
+		for _, evt := range h.Router.Route(activeSession, command) {
+			if err := writeEvent(conn, dumpWriter, evt); err != nil {
+				closeInfo = session.CloseInfo{Cause: session.CloseCauseError, Err: err.Error()}
+				activeSession.Fail(err.Error())
 				return nil
 			}
 		}
 
 		if command.Command == wsproto.CommandHangup {
+			closeInfo = session.CloseInfo{
+				Cause:     session.CloseCauseHangup,
+				Reason:    derefString(command.Reason),
+				Initiator: derefString(command.Initiator),
+			}
+			activeSession.RequestClose(closeInfo)
 			return nil
 		}
 	}
@@ -165,4 +199,57 @@ func newSessionID() string {
 		b[8:10],
 		b[10:16],
 	)
+}
+
+func parseDumpFlag(raw string) bool {
+	if raw == "" {
+		return true
+	}
+	enabled, err := strconv.ParseBool(raw)
+	if err != nil {
+		return true
+	}
+	return enabled
+}
+
+func derefString(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+
+func openDumpWriter(root, sessionID string, enabled bool) *callrecord.DumpWriter {
+	if !enabled {
+		return nil
+	}
+	writer, err := callrecord.OpenDumpWriter(root, sessionID)
+	if err != nil {
+		return nil
+	}
+	return writer
+}
+
+func closeDumpWriter(writer *callrecord.DumpWriter) {
+	if writer != nil {
+		_ = writer.Close()
+	}
+}
+
+func writeError(conn *websocket.Conn, writer *callrecord.DumpWriter, trackID, sender, message string) error {
+	return writeEvent(conn, writer, wsproto.NewErrorEvent(trackID, sender, message))
+}
+
+func writeEvent(conn *websocket.Conn, writer *callrecord.DumpWriter, evt wsproto.EventEnvelope) error {
+	data, err := wsinbound.MarshalEvent(evt)
+	if err != nil {
+		return err
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		return err
+	}
+	if writer != nil {
+		_ = writer.WriteEvent(data)
+	}
+	return nil
 }

@@ -3,6 +3,7 @@
 package session
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -55,12 +56,17 @@ func (m *Manager) Delete(id string) {
 }
 
 func (m *Manager) Kill(id string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.sessions[id]; !ok {
+	m.mu.RLock()
+	s, ok := m.sessions[id]
+	m.mu.RUnlock()
+	if !ok {
 		return false
 	}
-	delete(m.sessions, id)
+	s.RequestClose(CloseInfo{
+		Cause:     CloseCauseKill,
+		Reason:    "killed",
+		Initiator: "system",
+	})
 	return true
 }
 
@@ -70,6 +76,9 @@ func (m *Manager) List() []Summary {
 
 	out := make([]Summary, 0, len(m.sessions))
 	for _, s := range m.sessions {
+		if !s.VisibleInList() {
+			continue
+		}
 		out = append(out, Summary{
 			ID:        s.ID,
 			CallType:  string(s.Type),
@@ -77,5 +86,13 @@ func (m *Manager) List() []Summary {
 			Option:    s.Option,
 		})
 	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+
 	return out
 }

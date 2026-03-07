@@ -2,6 +2,11 @@
 
 package session
 
-func Cleanup(m *Manager, id string) {
-	m.Delete(id)
+func Cleanup(m *Manager, s *Session, fallback CloseInfo) CloseInfo {
+	if s == nil {
+		return normalizeCloseInfo(fallback)
+	}
+	info := s.Finalize(fallback)
+	m.Delete(s.ID)
+	return info
 }
