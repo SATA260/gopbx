@@ -284,10 +284,15 @@ func derefString(v *string) string {
 }
 
 func buildWebSocketAudioTrack(s *session.Session) *mediatrack.WebSocketTrack {
+	snapshot := s.Snapshot()
+	providerName := ""
+	if snapshot.Option != nil && snapshot.Option.ASR != nil && snapshot.Option.ASR.Provider != nil {
+		providerName = *snapshot.Option.ASR.Provider
+	}
 	chain := processor.NewChain(
 		processor.NewDenoise(),
 		processor.NewVAD(),
-		processor.NewASR(s.ID),
+		processor.NewASR(s.ID, asroutbound.ResolveProvider(providerName)),
 		processor.NewRecorder(),
 	)
 	return mediatrack.NewWebSocketTrack(s.ID, stream.New(s.ID, chain))

@@ -14,3 +14,15 @@ func TestValidateProvider(t *testing.T) {
 		t.Fatal("expected unknown provider to fail validation")
 	}
 }
+
+func TestResolveProvider(t *testing.T) {
+	if provider := ResolveProvider(ProviderAliyun); provider.Name() != ProviderAliyun {
+		t.Fatalf("unexpected aliyun provider: %s", provider.Name())
+	}
+	if provider := ResolveProvider(ProviderTencent); provider.Name() != ProviderTencent {
+		t.Fatalf("unexpected tencent provider: %s", provider.Name())
+	}
+	if provider := ResolveProvider("unknown"); provider.Name() != ProviderMock {
+		t.Fatalf("unexpected fallback provider: %s", provider.Name())
+	}
+}

@@ -14,3 +14,15 @@ func TestValidateProvider(t *testing.T) {
 		t.Fatal("expected unknown provider to fail validation")
 	}
 }
+
+func TestResolveProvider(t *testing.T) {
+	if provider := ResolveProvider(ProviderAliyun); provider.MetricKey("ttfb") != "ttfb.tts.aliyun" {
+		t.Fatalf("unexpected aliyun metric key: %s", provider.MetricKey("ttfb"))
+	}
+	if provider := ResolveProvider(ProviderTencent); provider.MetricKey("completed") != "completed.tts.tencent" {
+		t.Fatalf("unexpected tencent metric key: %s", provider.MetricKey("completed"))
+	}
+	if provider := ResolveProvider("unknown"); provider.Name() != ProviderMock {
+		t.Fatalf("unexpected fallback provider: %s", provider.Name())
+	}
+}

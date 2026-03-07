@@ -67,3 +67,58 @@ func TestPlayAutoHangupClosesSession(t *testing.T) {
 
 	expectClose(t, conn)
 }
+
+func TestProviderSpecificASRAndTTSMetrics(t *testing.T) {
+	_, server := newIntegrationServer(t)
+	conn := dialCallWS(t, server.URL, compat.RouteCall, "provider-session")
+
+	if err := conn.WriteJSON(map[string]any{
+		"command": "invite",
+		"option": map[string]any{
+			"offer": "v=0",
+			"asr": map[string]any{
+				"provider": "tencent",
+			},
+			"tts": map[string]any{
+				"provider": "tencent",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send provider invite: %v", err)
+	}
+	requireEventName(t, readEvent(t, conn), compat.EventAnswer)
+
+	if err := conn.WriteMessage(websocket.BinaryMessage, []byte{0x01, 0x02}); err != nil {
+		t.Fatalf("send provider binary audio: %v", err)
+	}
+	asrMetrics := readEvent(t, conn)
+	requireEventName(t, asrMetrics, compat.EventMetrics)
+	requireEventField(t, asrMetrics, "key", "ttfb.asr.tencent")
+	asrFinal := readEvent(t, conn)
+	requireEventName(t, asrFinal, compat.EventASRFinal)
+	requireEventField(t, asrFinal, "text", "tencent asr final 1")
+
+	if err := conn.WriteJSON(map[string]any{
+		"command": "tts",
+		"text":    "hello",
+		"option": map[string]any{
+			"provider": "tencent",
+		},
+	}); err != nil {
+		t.Fatalf("send provider tts: %v", err)
+	}
+	requireEventName(t, readEvent(t, conn), compat.EventTrackStart)
+	ttsMetrics := readEvent(t, conn)
+	requireEventName(t, ttsMetrics, compat.EventMetrics)
+	requireEventField(t, ttsMetrics, "key", "ttfb.tts.tencent")
+	completedMetrics := readEvent(t, conn)
+	requireEventName(t, completedMetrics, compat.EventMetrics)
+	requireEventField(t, completedMetrics, "key", "completed.tts.tencent")
+	requireEventName(t, readEvent(t, conn), compat.EventTrackEnd)
+
+	if err := conn.WriteJSON(map[string]any{"command": "hangup"}); err != nil {
+		t.Fatalf("send cleanup hangup: %v", err)
+	}
+	requireEventName(t, readEvent(t, conn), compat.EventHangup)
+	expectClose(t, conn)
+}

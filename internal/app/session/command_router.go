@@ -3,6 +3,7 @@
 package session
 
 import (
+	ttsadapter "gopbx/internal/adapter/outbound/tts"
 	mediatrack "gopbx/internal/app/media/track"
 	"gopbx/internal/compat"
 	"gopbx/pkg/wsproto"
@@ -30,6 +31,7 @@ func (r *CommandRouter) Route(s *Session, cmd *wsproto.CommandEnvelope) CommandR
 	case wsproto.CommandTTS:
 		trackID := s.StartTrack("tts", cmd.PlayID)
 		ttsTrack := mediatrack.NewTTSTrack(trackID, cmd.Text, cmd.Speaker, cmd.PlayID)
+		provider := resolveTTSProvider(s, cmd)
 		events := []wsproto.EventEnvelope{
 			{
 				Event:     compat.EventTrackStart,
@@ -39,18 +41,19 @@ func (r *CommandRouter) Route(s *Session, cmd *wsproto.CommandEnvelope) CommandR
 			{
 				Event:     compat.EventMetrics,
 				Timestamp: timestamp,
-				Key:       "ttfb.tts.mock",
+				Key:       provider.MetricKey("ttfb"),
 				Duration:  wsproto.Uint64(0),
-				Data:      ttsTrack.MetricsData(derefBool(cmd.Streaming), derefBool(cmd.EndOfStream)),
+				Data:      withProvider(ttsTrack.MetricsData(derefBool(cmd.Streaming), derefBool(cmd.EndOfStream)), provider.Name()),
 			},
 			{
 				Event:     compat.EventMetrics,
 				Timestamp: timestamp,
-				Key:       "completed.tts.mock",
+				Key:       provider.MetricKey("completed"),
 				Duration:  wsproto.Uint64(0),
 				Data: map[string]any{
-					"trackId": ttsTrack.TrackID(),
-					"length":  len(cmd.Text),
+					"trackId":  ttsTrack.TrackID(),
+					"length":   len(cmd.Text),
+					"provider": provider.Name(),
 				},
 			},
 			{
@@ -162,6 +165,25 @@ func hangupEvent(timestamp int64, info *CloseInfo) wsproto.EventEnvelope {
 		Reason:    info.Reason,
 		Initiator: info.Initiator,
 	}
+}
+
+func resolveTTSProvider(s *Session, cmd *wsproto.CommandEnvelope) ttsadapter.Provider {
+	if option, err := cmd.TTSOption(); err == nil && option != nil && option.Provider != nil {
+		return ttsadapter.ResolveProvider(*option.Provider)
+	}
+	snapshot := s.Snapshot()
+	if snapshot.Option != nil && snapshot.Option.TTS != nil && snapshot.Option.TTS.Provider != nil {
+		return ttsadapter.ResolveProvider(*snapshot.Option.TTS.Provider)
+	}
+	return ttsadapter.ResolveProvider("")
+}
+
+func withProvider(data map[string]any, provider string) map[string]any {
+	if data == nil {
+		data = make(map[string]any, 1)
+	}
+	data["provider"] = provider
+	return data
 }
 
 func derefString(v *string) string {

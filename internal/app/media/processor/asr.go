@@ -3,9 +3,9 @@
 package processor
 
 import (
-	"fmt"
 	"sync"
 
+	asradapter "gopbx/internal/adapter/outbound/asr"
 	"gopbx/internal/compat"
 	mediaentity "gopbx/internal/domain/media"
 	"gopbx/internal/domain/protocol"
@@ -13,19 +13,23 @@ import (
 )
 
 type ASR struct {
-	mu      sync.Mutex
-	trackID string
-	index   uint32
-	started bool
+	mu       sync.Mutex
+	trackID  string
+	index    uint32
+	started  bool
+	provider asradapter.Provider
 }
 
-func NewASR(trackID string) *ASR {
-	return &ASR{trackID: trackID}
+func NewASR(trackID string, provider asradapter.Provider) *ASR {
+	if provider == nil {
+		provider = asradapter.ResolveProvider("")
+	}
+	return &ASR{trackID: trackID, provider: provider}
 }
 
 func (a *ASR) Name() string { return "asr" }
 
-// Process 这里先用 mock 事件复刻调用链节奏：首个音频包产出 ttfb.asr.mock，随后每个非空包产出 asrFinal。
+// Process 会按 provider 生成兼容风格的 ASR 事件；当前仍是 mock 结果，但指标名和文本来源已经按 provider 分流。
 func (a *ASR) Process(packet mediaentity.Packet) []protocol.Event {
 	if len(packet.Data) == 0 {
 		return nil
@@ -44,11 +48,12 @@ func (a *ASR) Process(packet mediaentity.Packet) []protocol.Event {
 		events = append(events, protocol.Event{
 			Event:     compat.EventMetrics,
 			Timestamp: now,
-			Key:       "ttfb.asr.mock",
+			Key:       "ttfb.asr." + a.provider.Name(),
 			Duration:  wsproto.Uint64(0),
 			Data: map[string]any{
-				"trackId": packet.TrackID,
-				"bytes":   len(packet.Data),
+				"trackId":  packet.TrackID,
+				"provider": a.provider.Name(),
+				"bytes":    len(packet.Data),
 			},
 		})
 	}
@@ -59,7 +64,7 @@ func (a *ASR) Process(packet mediaentity.Packet) []protocol.Event {
 		Index:     wsproto.Uint32(index),
 		StartTime: wsproto.Int64(now),
 		EndTime:   wsproto.Int64(now),
-		Text:      fmt.Sprintf("mock asr final %d", index),
+		Text:      a.provider.Transcribe(packet.Data, index),
 	})
 	return events
 }
