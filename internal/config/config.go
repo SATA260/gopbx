@@ -16,15 +16,17 @@ import (
 type Config struct {
 	Server       ServerConfig
 	LLMProxy     LLMProxyConfig
+	ICEProvider  ICEProviderConfig
 	RecorderPath string
 	ICEServers   []wsproto.ICEServer
 }
 
 type rawConfig struct {
-	Server       ServerConfig   `koanf:"server"`
-	LLMProxy     LLMProxyConfig `koanf:"llm_proxy"`
-	RecorderPath string         `koanf:"recorder_path"`
-	ICEServers   string         `koanf:"ice_servers"`
+	Server       ServerConfig      `koanf:"server"`
+	LLMProxy     LLMProxyConfig    `koanf:"llm_proxy"`
+	ICEProvider  ICEProviderConfig `koanf:"ice_provider"`
+	RecorderPath string            `koanf:"recorder_path"`
+	ICEServers   string            `koanf:"ice_servers"`
 }
 
 type ServerConfig struct {
@@ -48,6 +50,12 @@ type LLMProxyConfig struct {
 	APIKey   string `koanf:"api_key"`
 }
 
+type ICEProviderConfig struct {
+	Endpoint string `koanf:"endpoint"`
+	APIKey   string `koanf:"api_key"`
+	Timeout  string `koanf:"timeout"`
+}
+
 func Default() *Config {
 	return &Config{
 		Server: ServerConfig{
@@ -56,6 +64,9 @@ func Default() *Config {
 		},
 		LLMProxy: LLMProxyConfig{
 			Endpoint: "https://api.openai.com/v1",
+		},
+		ICEProvider: ICEProviderConfig{
+			Timeout: "3s",
 		},
 		RecorderPath: "./tmp/recordings",
 		ICEServers:   nil,
@@ -79,6 +90,7 @@ func Load() (*Config, error) {
 	raw := rawConfig{
 		Server:       defaults.Server,
 		LLMProxy:     defaults.LLMProxy,
+		ICEProvider:  defaults.ICEProvider,
 		RecorderPath: defaults.RecorderPath,
 	}
 	if len(defaults.ICEServers) > 0 {
@@ -96,6 +108,7 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		Server:       raw.Server,
 		LLMProxy:     raw.LLMProxy,
+		ICEProvider:  raw.ICEProvider,
 		RecorderPath: raw.RecorderPath,
 	}
 

@@ -27,5 +27,8 @@ go run ./cmd/gateway
 - `GOPBX_SERVER__SHUTDOWN_TIMEOUT`：优雅停机超时
 - `GOPBX_LLM_PROXY__ENDPOINT`：LLM 上游地址
 - `GOPBX_LLM_PROXY__API_KEY`：LLM 上游密钥
+- `GOPBX_ICE_PROVIDER__ENDPOINT`：远端 ICE 分配接口地址
+- `GOPBX_ICE_PROVIDER__API_KEY`：远端 ICE 分配接口密钥
+- `GOPBX_ICE_PROVIDER__TIMEOUT`：远端 ICE 分配接口超时
 - `GOPBX_RECORDER_PATH`：会话录音与 command/event dump 文件目录
 - `GOPBX_ICE_SERVERS`：ICE Server JSON 数组

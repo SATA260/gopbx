@@ -92,3 +92,23 @@ func TestICEServersCredentialShape(t *testing.T) {
 	}
 	assertJSONEq(t, mustReadFixture(t, "iceservers_credential.json"), rec.Body.Bytes())
 }
+
+func TestICEServersNullShapeWhenRemoteProviderFails(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer upstream.Close()
+
+	cfg := config.Default()
+	cfg.ICEProvider.Endpoint = upstream.URL
+	app := bootstrap.New(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, compat.RouteICEServers, nil)
+	rec := httptest.NewRecorder()
+	app.Echo.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	assertJSONEq(t, mustReadFixture(t, "iceservers_null.json"), rec.Body.Bytes())
+}

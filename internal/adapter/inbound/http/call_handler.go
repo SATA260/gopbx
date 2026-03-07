@@ -11,6 +11,7 @@ import (
 
 	wsinbound "gopbx/internal/adapter/inbound/ws"
 	asroutbound "gopbx/internal/adapter/outbound/asr"
+	iceoutbound "gopbx/internal/adapter/outbound/ice"
 	llmoutbound "gopbx/internal/adapter/outbound/llm"
 	ttsoutbound "gopbx/internal/adapter/outbound/tts"
 	"gopbx/internal/app/callrecord"
@@ -35,6 +36,7 @@ type Handlers struct {
 	Metrics     *observability.Metrics
 	Tracer      *observability.Tracer
 	Router      *session.CommandRouter
+	iceProvider iceoutbound.Provider
 	proxy       *llmoutbound.Proxy
 }
 
@@ -47,6 +49,7 @@ func NewHandlers(cfg *config.Config, sessions *session.Manager, records *callrec
 		Metrics:     metrics,
 		Tracer:      tracer,
 		Router:      session.NewCommandRouter(),
+		iceProvider: iceoutbound.NewRemoteProvider(cfg.ICEProvider),
 		proxy:       llmoutbound.NewProxy(cfg.LLMProxy),
 	}
 }
