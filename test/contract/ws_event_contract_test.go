@@ -82,3 +82,42 @@ func TestMarshalTrackEndEvent(t *testing.T) {
 	}
 	assertJSONEq(t, mustReadFixture(t, "track_end.json"), data)
 }
+
+func TestMarshalTrackStartEvent(t *testing.T) {
+	data, err := wsinbound.MarshalEvent(wsproto.EventEnvelope{
+		Event:     compat.EventTrackStart,
+		TrackID:   "track-1",
+		Timestamp: 1711111116666,
+	})
+	if err != nil {
+		t.Fatalf("marshal trackStart event: %v", err)
+	}
+	assertJSONEq(t, mustReadFixture(t, "track_start.json"), data)
+}
+
+func TestMarshalHangupEvent(t *testing.T) {
+	data, err := wsinbound.MarshalEvent(wsproto.EventEnvelope{
+		Event:     compat.EventHangup,
+		Timestamp: 1711111117777,
+		Reason:    "done",
+		Initiator: "client",
+	})
+	if err != nil {
+		t.Fatalf("marshal hangup event: %v", err)
+	}
+	assertJSONEq(t, mustReadFixture(t, "hangup.json"), data)
+}
+
+func TestMarshalHistoryEvent(t *testing.T) {
+	data, err := wsinbound.MarshalEvent(wsproto.EventEnvelope{
+		Event:     compat.EventAddHistory,
+		Timestamp: 1711111118888,
+		Sender:    "session-1",
+		Speaker:   "assistant",
+		Text:      "hello",
+	})
+	if err != nil {
+		t.Fatalf("marshal history event: %v", err)
+	}
+	assertJSONEq(t, mustReadFixture(t, "history_event.json"), data)
+}

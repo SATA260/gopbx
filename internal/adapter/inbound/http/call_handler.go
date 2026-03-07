@@ -13,6 +13,9 @@ import (
 	llmoutbound "gopbx/internal/adapter/outbound/llm"
 	ttsoutbound "gopbx/internal/adapter/outbound/tts"
 	"gopbx/internal/app/callrecord"
+	"gopbx/internal/app/media/processor"
+	"gopbx/internal/app/media/stream"
+	mediatrack "gopbx/internal/app/media/track"
 	"gopbx/internal/app/session"
 	"gopbx/internal/compat"
 	"gopbx/internal/config"
@@ -66,10 +69,14 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 	defer closeDumpWriter(dumpWriter)
 
 	var activeSession *session.Session
+	var audioTrack *mediatrack.WebSocketTrack
 	closeInfo := session.CloseInfo{Cause: session.CloseCauseDisconnect}
 	defer func() {
 		if activeSession != nil {
 			session.Cleanup(h.Sessions, activeSession, closeInfo)
+		}
+		if audioTrack != nil && audioTrack.Stream != nil {
+			audioTrack.Stream.Close()
 		}
 	}()
 
@@ -109,6 +116,9 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 	activeSession.BindCloseFunc(func() {
 		_ = conn.Close()
 	})
+	if callType == session.TypeWebSocket {
+		audioTrack = buildWebSocketAudioTrack(activeSession)
+	}
 
 	answer := wsproto.EventEnvelope{
 		Event:     compat.EventAnswer,
@@ -130,7 +140,20 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 			return nil
 		}
 
-		if messageType != 1 {
+		if messageType == websocket.BinaryMessage {
+			if callType == session.TypeWebSocket && audioTrack != nil {
+				for _, evt := range audioTrack.HandleBinary(payload) {
+					if err := writeEvent(conn, dumpWriter, evt); err != nil {
+						closeInfo = session.CloseInfo{Cause: session.CloseCauseError, Err: err.Error()}
+						activeSession.Fail(err.Error())
+						return nil
+					}
+				}
+			}
+			continue
+		}
+
+		if messageType != websocket.TextMessage {
 			continue
 		}
 
@@ -143,7 +166,8 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		}
 		_ = dumpWriter.WriteCommand(payload)
 
-		for _, evt := range h.Router.Route(activeSession, command) {
+		result := h.Router.Route(activeSession, command)
+		for _, evt := range result.Events {
 			if err := writeEvent(conn, dumpWriter, evt); err != nil {
 				closeInfo = session.CloseInfo{Cause: session.CloseCauseError, Err: err.Error()}
 				activeSession.Fail(err.Error())
@@ -151,13 +175,9 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 			}
 		}
 
-		if command.Command == wsproto.CommandHangup {
-			// hangup 既要回事件，也要把关闭原因带进会话终态，供列表清理和后续话单复用。
-			closeInfo = session.CloseInfo{
-				Cause:     session.CloseCauseHangup,
-				Reason:    derefString(command.Reason),
-				Initiator: derefString(command.Initiator),
-			}
+		if result.Close != nil {
+			// hangup / autohangup 等关闭动作会在事件发完后再真正收敛，避免连接提前关闭导致客户端收不到末尾事件。
+			closeInfo = *result.Close
 			activeSession.RequestClose(closeInfo)
 			return nil
 		}
@@ -223,6 +243,16 @@ func derefString(v *string) string {
 		return ""
 	}
 	return *v
+}
+
+func buildWebSocketAudioTrack(s *session.Session) *mediatrack.WebSocketTrack {
+	chain := processor.NewChain(
+		processor.NewDenoise(),
+		processor.NewVAD(),
+		processor.NewASR(s.ID),
+		processor.NewRecorder(),
+	)
+	return mediatrack.NewWebSocketTrack(s.ID, stream.New(s.ID, chain))
 }
 
 func openDumpWriter(root, sessionID string, enabled bool) *callrecord.DumpWriter {

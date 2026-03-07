@@ -1,0 +1,7 @@
+{
+  "event": "addHistory",
+  "timestamp": 1711111118888,
+  "sender": "session-1",
+  "speaker": "assistant",
+  "text": "hello"
+}

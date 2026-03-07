@@ -54,6 +54,8 @@ type Session struct {
 	closeFn        func()
 	closeFnCalled  bool
 	done           chan struct{}
+	trackSeq       uint64
+	currentTrackID string
 }
 
 func NewSession(id string, typ Type, option *wsproto.CallOption) *Session {
@@ -223,6 +225,35 @@ func (s *Session) Done() <-chan struct{} {
 	return s.done
 }
 
+// StartTrack 会为一次新的服务端播报分配可追踪的 trackId。
+// 如果命令里自带 playId，就优先复用它，方便外部调用方把控制命令和事件串起来。
+func (s *Session) StartTrack(prefix string, playID *string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if playID != nil && *playID != "" {
+		s.currentTrackID = *playID
+		return s.currentTrackID
+	}
+	s.trackSeq++
+	s.currentTrackID = prefix + "-" + s.ID + "-" + formatTrackSeq(s.trackSeq)
+	return s.currentTrackID
+}
+
+// ClearTrack 在播报自然结束或被 interrupt 打断时清空当前活动 track。
+func (s *Session) ClearTrack() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	trackID := s.currentTrackID
+	s.currentTrackID = ""
+	return trackID
+}
+
+func (s *Session) CurrentTrackID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.currentTrackID
+}
+
 func (s *Session) isTerminalLocked() bool {
 	return s.state == StateClosing || s.state == StateClosed || s.state == StateFailed
 }
@@ -252,4 +283,20 @@ func mergeCloseInfo(primary, fallback CloseInfo) CloseInfo {
 		primary.Err = fallback.Err
 	}
 	return primary
+}
+
+func formatTrackSeq(v uint64) string {
+	const digits = "0123456789"
+	if v == 0 {
+		return "0"
+	}
+	buf := make([]byte, 0, 20)
+	for v > 0 {
+		buf = append(buf, digits[v%10])
+		v /= 10
+	}
+	for i, j := 0, len(buf)-1; i < j; i, j = i+1, j-1 {
+		buf[i], buf[j] = buf[j], buf[i]
+	}
+	return string(buf)
 }

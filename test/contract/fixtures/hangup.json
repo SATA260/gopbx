@@ -1,0 +1,6 @@
+{
+  "event": "hangup",
+  "timestamp": 1711111117777,
+  "reason": "done",
+  "initiator": "client"
+}

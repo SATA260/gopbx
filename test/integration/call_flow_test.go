@@ -15,8 +15,8 @@ func TestCommandRouterTTS(t *testing.T) {
 	router := session.NewCommandRouter()
 	s := session.NewSession("s1", session.TypeWebRTC, nil)
 	playID := "p1"
-	events := router.Route(s, &wsproto.CommandEnvelope{Command: wsproto.CommandTTS, PlayID: &playID})
-	if len(events) == 0 {
+	result := router.Route(s, &wsproto.CommandEnvelope{Command: wsproto.CommandTTS, PlayID: &playID})
+	if len(result.Events) == 0 {
 		t.Fatal("expected events for tts command")
 	}
 }
