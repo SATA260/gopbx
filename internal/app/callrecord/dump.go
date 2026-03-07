@@ -29,6 +29,8 @@ type DumpWriter struct {
 	path string
 }
 
+// OpenDumpWriter 按会话维度打开一个 JSONL 文件。
+// 这里沿用每会话一个文件的方式，便于直接把同一通会话的 command/event 时序打包归档。
 func OpenDumpWriter(root, sessionID string) (*DumpWriter, error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
@@ -70,6 +72,8 @@ func (w *DumpWriter) Close() error {
 	return err
 }
 
+// write 是内部统一落盘入口。
+// 它只负责把原始协议 JSON 包上一层元信息，不改写 content，后续排查时可以直接回放原始命令和事件。
 func (w *DumpWriter) write(kind DumpEntryType, content []byte) error {
 	if w == nil {
 		return nil

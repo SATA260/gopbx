@@ -46,6 +46,9 @@ func (h *Handlers) HandleWebRTCCallWS(c echo.Context) error {
 	return h.serveWS(c, session.TypeWebRTC)
 }
 
+// serveWS 承担整个会话入口主流程：
+// 1. 升级 WS 并解析 query；2. 校验首包 invite/accept；3. 注册会话并回 answer；
+// 4. 进入命令循环；5. 在 hangup/kill/disconnect/error 时统一收敛到 Cleanup。
 func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 	upgrader := wsinbound.NewUpgrader()
 	conn, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
@@ -79,6 +82,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		return nil
 	}
 
+	// 首包既是协议校验点，也是建会参数入口；只有首包合法，才会把会话注册到 manager。
 	cmd, err := wsinbound.DecodeCommand(firstMessage)
 	if err != nil {
 		_ = writeError(conn, dumpWriter, sessionID, "handle_call", err.Error())
@@ -117,6 +121,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		activeSession.Fail(err.Error())
 		return nil
 	}
+	// answer 发出后，会话才算进入 Active，后续才会出现在 /call/lists 中并接收业务命令。
 	activeSession.MarkActive()
 
 	for {
@@ -147,6 +152,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		}
 
 		if command.Command == wsproto.CommandHangup {
+			// hangup 既要回事件，也要把关闭原因带进会话终态，供列表清理和后续话单复用。
 			closeInfo = session.CloseInfo{
 				Cause:     session.CloseCauseHangup,
 				Reason:    derefString(command.Reason),
@@ -240,6 +246,8 @@ func writeError(conn *websocket.Conn, writer *callrecord.DumpWriter, trackID, se
 	return writeEvent(conn, writer, wsproto.NewErrorEvent(trackID, sender, message))
 }
 
+// writeEvent 保证“发给客户端的 JSON”和“写入 dump 的 JSON”完全一致，
+// 避免后面排障时出现线上返回值与落盘内容不一致的问题。
 func writeEvent(conn *websocket.Conn, writer *callrecord.DumpWriter, evt wsproto.EventEnvelope) error {
 	data, err := wsinbound.MarshalEvent(evt)
 	if err != nil {

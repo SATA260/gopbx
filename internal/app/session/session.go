@@ -112,6 +112,8 @@ func (s *Session) Fail(err string) {
 	s.RequestClose(CloseInfo{Cause: CloseCauseError, Err: err})
 }
 
+// RequestClose 负责把各种关闭来源收敛成一次关闭请求。
+// 这里不直接做最终清理，只负责记录关闭原因、切状态，并触发外部绑定的连接关闭函数。
 func (s *Session) RequestClose(info CloseInfo) {
 	var closeFn func()
 
@@ -153,6 +155,8 @@ func (s *Session) RequestClose(info CloseInfo) {
 	}
 }
 
+// BindCloseFunc 绑定底层连接的关闭动作。
+// 如果会话在绑定前已经进入关闭流程，这里会立刻执行一次，避免出现状态已关闭但连接仍存活的情况。
 func (s *Session) BindCloseFunc(fn func()) {
 	var callNow bool
 
@@ -169,6 +173,8 @@ func (s *Session) BindCloseFunc(fn func()) {
 	}
 }
 
+// Finalize 负责把会话推进到 Closed，并返回最终收敛后的关闭信息。
+// fallback 用于兜底处理“对端断开但业务侧没显式给出原因”这类场景。
 func (s *Session) Finalize(fallback CloseInfo) CloseInfo {
 	s.mu.Lock()
 	info := normalizeCloseInfo(fallback)

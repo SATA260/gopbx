@@ -55,6 +55,8 @@ func (m *Manager) Delete(id string) {
 	delete(m.sessions, id)
 }
 
+// Kill 的语义是“请求关闭指定会话”，而不是直接删除内存记录。
+// 这样可以保证底层 WS 连接、生命周期状态和管理接口可见性保持一致。
 func (m *Manager) Kill(id string) bool {
 	m.mu.RLock()
 	s, ok := m.sessions[id]
@@ -87,6 +89,7 @@ func (m *Manager) List() []Summary {
 		})
 	}
 
+	// 对外列表只暴露仍可交互的会话；同一时间下再按 ID 排序，保证输出稳定。
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
 			return out[i].ID < out[j].ID
