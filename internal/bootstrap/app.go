@@ -36,7 +36,7 @@ func New(cfg *config.Config) *App {
 		Echo:        e,
 		Config:      cfg,
 		Sessions:    session.NewManager(),
-		CallRecords: callrecord.NewManager(storage.LocalWriter{Root: cfg.RecorderPath}),
+		CallRecords: callrecord.NewManager(storage.NewCallRecordWriter(cfg)),
 		Logger:      observability.NewLogger(),
 		Metrics:     observability.NewMetrics(),
 		Tracer:      observability.NewTracer(),

@@ -17,16 +17,18 @@ type Config struct {
 	Server       ServerConfig
 	LLMProxy     LLMProxyConfig
 	ICEProvider  ICEProviderConfig
+	CallRecord   CallRecordStorageConfig
 	RecorderPath string
 	ICEServers   []wsproto.ICEServer
 }
 
 type rawConfig struct {
-	Server       ServerConfig      `koanf:"server"`
-	LLMProxy     LLMProxyConfig    `koanf:"llm_proxy"`
-	ICEProvider  ICEProviderConfig `koanf:"ice_provider"`
-	RecorderPath string            `koanf:"recorder_path"`
-	ICEServers   string            `koanf:"ice_servers"`
+	Server       ServerConfig            `koanf:"server"`
+	LLMProxy     LLMProxyConfig          `koanf:"llm_proxy"`
+	ICEProvider  ICEProviderConfig       `koanf:"ice_provider"`
+	CallRecord   CallRecordStorageConfig `koanf:"callrecord"`
+	RecorderPath string                  `koanf:"recorder_path"`
+	ICEServers   string                  `koanf:"ice_servers"`
 }
 
 type ServerConfig struct {
@@ -56,6 +58,15 @@ type ICEProviderConfig struct {
 	Timeout  string `koanf:"timeout"`
 }
 
+type CallRecordStorageConfig struct {
+	Type     string `koanf:"type"`
+	Endpoint string `koanf:"endpoint"`
+	Bucket   string `koanf:"bucket"`
+	Prefix   string `koanf:"prefix"`
+	APIKey   string `koanf:"api_key"`
+	Timeout  string `koanf:"timeout"`
+}
+
 func Default() *Config {
 	return &Config{
 		Server: ServerConfig{
@@ -67,6 +78,10 @@ func Default() *Config {
 		},
 		ICEProvider: ICEProviderConfig{
 			Timeout: "3s",
+		},
+		CallRecord: CallRecordStorageConfig{
+			Type:    "local",
+			Timeout: "5s",
 		},
 		RecorderPath: "./tmp/recordings",
 		ICEServers:   nil,
@@ -91,6 +106,7 @@ func Load() (*Config, error) {
 		Server:       defaults.Server,
 		LLMProxy:     defaults.LLMProxy,
 		ICEProvider:  defaults.ICEProvider,
+		CallRecord:   defaults.CallRecord,
 		RecorderPath: defaults.RecorderPath,
 	}
 	if len(defaults.ICEServers) > 0 {
@@ -109,6 +125,7 @@ func Load() (*Config, error) {
 		Server:       raw.Server,
 		LLMProxy:     raw.LLMProxy,
 		ICEProvider:  raw.ICEProvider,
+		CallRecord:   raw.CallRecord,
 		RecorderPath: raw.RecorderPath,
 	}
 
