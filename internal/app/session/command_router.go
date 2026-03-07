@@ -3,6 +3,7 @@
 package session
 
 import (
+	mediatrack "gopbx/internal/app/media/track"
 	"gopbx/internal/compat"
 	"gopbx/pkg/wsproto"
 )
@@ -28,10 +29,11 @@ func (r *CommandRouter) Route(s *Session, cmd *wsproto.CommandEnvelope) CommandR
 	switch cmd.Command {
 	case wsproto.CommandTTS:
 		trackID := s.StartTrack("tts", cmd.PlayID)
+		ttsTrack := mediatrack.NewTTSTrack(trackID, cmd.Text, cmd.Speaker, cmd.PlayID)
 		events := []wsproto.EventEnvelope{
 			{
 				Event:     compat.EventTrackStart,
-				TrackID:   trackID,
+				TrackID:   ttsTrack.TrackID(),
 				Timestamp: timestamp,
 			},
 			{
@@ -39,13 +41,7 @@ func (r *CommandRouter) Route(s *Session, cmd *wsproto.CommandEnvelope) CommandR
 				Timestamp: timestamp,
 				Key:       "ttfb.tts.mock",
 				Duration:  wsproto.Uint64(0),
-				Data: map[string]any{
-					"speaker":     derefString(cmd.Speaker),
-					"playId":      derefString(cmd.PlayID),
-					"streaming":   derefBool(cmd.Streaming),
-					"endOfStream": derefBool(cmd.EndOfStream),
-					"length":      len(cmd.Text),
-				},
+				Data:      ttsTrack.MetricsData(derefBool(cmd.Streaming), derefBool(cmd.EndOfStream)),
 			},
 			{
 				Event:     compat.EventMetrics,
@@ -53,13 +49,13 @@ func (r *CommandRouter) Route(s *Session, cmd *wsproto.CommandEnvelope) CommandR
 				Key:       "completed.tts.mock",
 				Duration:  wsproto.Uint64(0),
 				Data: map[string]any{
-					"trackId": trackID,
+					"trackId": ttsTrack.TrackID(),
 					"length":  len(cmd.Text),
 				},
 			},
 			{
 				Event:     compat.EventTrackEnd,
-				TrackID:   trackID,
+				TrackID:   ttsTrack.TrackID(),
 				Timestamp: timestamp,
 				Duration:  wsproto.Uint64(0),
 			},
@@ -72,10 +68,11 @@ func (r *CommandRouter) Route(s *Session, cmd *wsproto.CommandEnvelope) CommandR
 		return CommandResult{Events: events, Close: closeInfo}
 	case wsproto.CommandPlay:
 		trackID := s.StartTrack("play", cmd.PlayID)
+		fileTrack := mediatrack.NewFileTrack(trackID, derefString(cmd.URL), cmd.PlayID)
 		events := []wsproto.EventEnvelope{
 			{
 				Event:     compat.EventTrackStart,
-				TrackID:   trackID,
+				TrackID:   fileTrack.TrackID(),
 				Timestamp: timestamp,
 			},
 			{
@@ -83,14 +80,11 @@ func (r *CommandRouter) Route(s *Session, cmd *wsproto.CommandEnvelope) CommandR
 				Timestamp: timestamp,
 				Key:       "completed.play.mock",
 				Duration:  wsproto.Uint64(0),
-				Data: map[string]any{
-					"trackId": trackID,
-					"url":     derefString(cmd.URL),
-				},
+				Data:      fileTrack.MetricsData(),
 			},
 			{
 				Event:     compat.EventTrackEnd,
-				TrackID:   trackID,
+				TrackID:   fileTrack.TrackID(),
 				Timestamp: timestamp,
 				Duration:  wsproto.Uint64(0),
 			},

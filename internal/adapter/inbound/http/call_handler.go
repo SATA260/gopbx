@@ -147,11 +147,12 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		audioTrack = buildWebSocketAudioTrack(activeSession)
 	}
 
+	answerSDP := buildAnswerSDP(callType, activeSession, callOption)
 	answer := wsproto.EventEnvelope{
 		Event:     compat.EventAnswer,
 		TrackID:   activeSession.ID,
 		Timestamp: wsproto.NowMillis(),
-		SDP:       buildAnswerSDP(callType, callOption),
+		SDP:       answerSDP,
 	}
 	if err := writeEvent(conn, dumpWriter, answer); err != nil {
 		h.Metrics.Inc("error.ws.answer_write")
@@ -216,14 +217,19 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 	}
 }
 
-func buildAnswerSDP(callType session.Type, option *wsproto.CallOption) string {
+func buildAnswerSDP(callType session.Type, activeSession *session.Session, option *wsproto.CallOption) string {
 	if callType != session.TypeWebRTC {
 		return ""
 	}
-	if option == nil || option.Offer == nil || *option.Offer == "" {
-		return "v=0\r\ns=gopbx\r\n"
+	codecName := ""
+	if option != nil && option.Codec != nil {
+		codecName = *option.Codec
 	}
-	return *option.Offer
+	offer := ""
+	if option != nil && option.Offer != nil {
+		offer = *option.Offer
+	}
+	return mediatrack.NewWebRTCTrack(activeSession.ID, offer, codecName).BuildAnswer()
 }
 
 func validateProviders(option *wsproto.CallOption) error {
