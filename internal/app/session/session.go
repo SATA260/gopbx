@@ -45,10 +45,12 @@ type Session struct {
 	Option    *wsproto.CallOption
 	Commands  []wsproto.CommandName
 
-	state State
-	dump  bool
+	state  State
+	dump   bool
+	answer string
 
 	closedAt       *time.Time
+	answeredAt     *time.Time
 	closeRequested bool
 	closeInfo      CloseInfo
 	closeFn        func()
@@ -56,6 +58,20 @@ type Session struct {
 	done           chan struct{}
 	trackSeq       uint64
 	currentTrackID string
+}
+
+type Snapshot struct {
+	ID         string
+	Type       Type
+	CreatedAt  time.Time
+	Option     *wsproto.CallOption
+	Commands   []wsproto.CommandName
+	State      State
+	Dump       bool
+	Answer     string
+	AnsweredAt *time.Time
+	ClosedAt   *time.Time
+	CloseInfo  CloseInfo
 }
 
 func NewSession(id string, typ Type, option *wsproto.CallOption) *Session {
@@ -108,6 +124,14 @@ func (s *Session) MarkActive() {
 		return
 	}
 	s.state = StateActive
+}
+
+func (s *Session) RecordAnswer(answer string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.answer = answer
+	now := time.Now().UTC()
+	s.answeredAt = &now
 }
 
 func (s *Session) Fail(err string) {
@@ -252,6 +276,27 @@ func (s *Session) CurrentTrackID() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.currentTrackID
+}
+
+// Snapshot 返回一份可安全跨协程使用的会话快照，避免清理阶段直接暴露会话内部锁保护的数据结构。
+func (s *Session) Snapshot() Snapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	commands := make([]wsproto.CommandName, len(s.Commands))
+	copy(commands, s.Commands)
+	return Snapshot{
+		ID:         s.ID,
+		Type:       s.Type,
+		CreatedAt:  s.CreatedAt,
+		Option:     s.Option,
+		Commands:   commands,
+		State:      s.state,
+		Dump:       s.dump,
+		Answer:     s.answer,
+		AnsweredAt: s.answeredAt,
+		ClosedAt:   s.closedAt,
+		CloseInfo:  s.closeInfo,
+	}
 }
 
 func (s *Session) isTerminalLocked() bool {

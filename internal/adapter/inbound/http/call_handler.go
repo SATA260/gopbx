@@ -5,6 +5,7 @@ package httpinbound
 import (
 	"crypto/rand"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -19,6 +20,7 @@ import (
 	"gopbx/internal/app/session"
 	"gopbx/internal/compat"
 	"gopbx/internal/config"
+	"gopbx/internal/observability"
 	"gopbx/pkg/wsproto"
 
 	"github.com/gorilla/websocket"
@@ -26,18 +28,26 @@ import (
 )
 
 type Handlers struct {
-	Config   *config.Config
-	Sessions *session.Manager
-	Router   *session.CommandRouter
-	proxy    *llmoutbound.Proxy
+	Config      *config.Config
+	Sessions    *session.Manager
+	CallRecords *callrecord.Manager
+	Logger      *slog.Logger
+	Metrics     *observability.Metrics
+	Tracer      *observability.Tracer
+	Router      *session.CommandRouter
+	proxy       *llmoutbound.Proxy
 }
 
-func NewHandlers(cfg *config.Config, sessions *session.Manager) *Handlers {
+func NewHandlers(cfg *config.Config, sessions *session.Manager, records *callrecord.Manager, logger *slog.Logger, metrics *observability.Metrics, tracer *observability.Tracer) *Handlers {
 	return &Handlers{
-		Config:   cfg,
-		Sessions: sessions,
-		Router:   session.NewCommandRouter(),
-		proxy:    llmoutbound.NewProxy(cfg.LLMProxy),
+		Config:      cfg,
+		Sessions:    sessions,
+		CallRecords: records,
+		Logger:      logger,
+		Metrics:     metrics,
+		Tracer:      tracer,
+		Router:      session.NewCommandRouter(),
+		proxy:       llmoutbound.NewProxy(cfg.LLMProxy),
 	}
 }
 
@@ -53,6 +63,11 @@ func (h *Handlers) HandleWebRTCCallWS(c echo.Context) error {
 // 1. 升级 WS 并解析 query；2. 校验首包 invite/accept；3. 注册会话并回 answer；
 // 4. 进入命令循环；5. 在 hangup/kill/disconnect/error 时统一收敛到 Cleanup。
 func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
+	span := h.Tracer.Start("serve_ws")
+	defer func() {
+		h.Metrics.Observe("completed.session.ms", uint64(span.End().Milliseconds()))
+	}()
+
 	upgrader := wsinbound.NewUpgrader()
 	conn, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
 	if err != nil {
@@ -67,6 +82,8 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 	dumpEnabled := parseDumpFlag(c.QueryParam("dump"))
 	dumpWriter := openDumpWriter(h.Config.RecorderPath, sessionID, dumpEnabled)
 	defer closeDumpWriter(dumpWriter)
+	logger := observability.WithSession(h.Logger, sessionID)
+	logger.Info("ws session connected", "call_type", callType, "dump", dumpEnabled)
 
 	var activeSession *session.Session
 	var audioTrack *mediatrack.WebSocketTrack
@@ -74,6 +91,9 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 	defer func() {
 		if activeSession != nil {
 			session.Cleanup(h.Sessions, activeSession, closeInfo)
+			record := buildCallRecord(activeSession, closeInfo, dumpWriter)
+			_ = h.CallRecords.Write(record)
+			logger.Info("ws session closed", "reason", closeInfo.Reason, "initiator", closeInfo.Initiator, "error", closeInfo.Err)
 		}
 		if audioTrack != nil && audioTrack.Stream != nil {
 			audioTrack.Stream.Close()
@@ -85,6 +105,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		return nil
 	}
 	if messageType != 1 {
+		h.Metrics.Inc("error.ws.invalid_message_type")
 		_ = writeError(conn, dumpWriter, sessionID, "handle_call", "Invalid message type")
 		return nil
 	}
@@ -92,11 +113,13 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 	// 首包既是协议校验点，也是建会参数入口；只有首包合法，才会把会话注册到 manager。
 	cmd, err := wsinbound.DecodeCommand(firstMessage)
 	if err != nil {
+		h.Metrics.Inc("error.ws.decode")
 		_ = writeError(conn, dumpWriter, sessionID, "handle_call", err.Error())
 		return nil
 	}
 	_ = dumpWriter.WriteCommand(firstMessage)
 	if err := wsinbound.ValidateFirstCommand(cmd); err != nil {
+		h.Metrics.Inc("error.ws.first_command")
 		_ = writeError(conn, dumpWriter, sessionID, "handle_call", err.Error())
 		return nil
 	}
@@ -106,6 +129,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		return nil
 	}
 	if err := validateProviders(callOption); err != nil {
+		h.Metrics.Inc("error.ws.provider")
 		_ = writeError(conn, dumpWriter, sessionID, "handle_call", err.Error())
 		return nil
 	}
@@ -127,10 +151,12 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		SDP:       buildAnswerSDP(callType, callOption),
 	}
 	if err := writeEvent(conn, dumpWriter, answer); err != nil {
+		h.Metrics.Inc("error.ws.answer_write")
 		closeInfo = session.CloseInfo{Cause: session.CloseCauseError, Err: err.Error()}
 		activeSession.Fail(err.Error())
 		return nil
 	}
+	activeSession.RecordAnswer(answer.SDP)
 	// answer 发出后，会话才算进入 Active，后续才会出现在 /call/lists 中并接收业务命令。
 	activeSession.MarkActive()
 
@@ -144,6 +170,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 			if callType == session.TypeWebSocket && audioTrack != nil {
 				for _, evt := range audioTrack.HandleBinary(payload) {
 					if err := writeEvent(conn, dumpWriter, evt); err != nil {
+						h.Metrics.Inc("error.ws.binary_write")
 						closeInfo = session.CloseInfo{Cause: session.CloseCauseError, Err: err.Error()}
 						activeSession.Fail(err.Error())
 						return nil
@@ -159,6 +186,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 
 		command, err := wsinbound.DecodeCommand(payload)
 		if err != nil {
+			h.Metrics.Inc("error.ws.decode")
 			_ = writeError(conn, dumpWriter, activeSession.ID, "handle_call", err.Error())
 			closeInfo = session.CloseInfo{Cause: session.CloseCauseError, Err: err.Error()}
 			activeSession.Fail(err.Error())
@@ -169,6 +197,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		result := h.Router.Route(activeSession, command)
 		for _, evt := range result.Events {
 			if err := writeEvent(conn, dumpWriter, evt); err != nil {
+				h.Metrics.Inc("error.ws.event_write")
 				closeInfo = session.CloseInfo{Cause: session.CloseCauseError, Err: err.Error()}
 				activeSession.Fail(err.Error())
 				return nil
@@ -290,4 +319,62 @@ func writeEvent(conn *websocket.Conn, writer *callrecord.DumpWriter, evt wsproto
 		_ = writer.WriteEvent(data)
 	}
 	return nil
+}
+
+func buildCallRecord(s *session.Session, closeInfo session.CloseInfo, dumpWriter *callrecord.DumpWriter) callrecord.Record {
+	snapshot := s.Snapshot()
+	if snapshot.CloseInfo.Cause != "" {
+		closeInfo = snapshot.CloseInfo
+	}
+	commands := make([]string, 0, len(snapshot.Commands))
+	for _, command := range snapshot.Commands {
+		commands = append(commands, string(command))
+	}
+	endTime := snapshot.CreatedAt
+	if snapshot.ClosedAt != nil {
+		endTime = *snapshot.ClosedAt
+	}
+	return callrecord.Record{
+		CallType:        string(snapshot.Type),
+		CallID:          snapshot.ID,
+		StartTime:       snapshot.CreatedAt,
+		EndTime:         endTime,
+		Caller:          optionCaller(snapshot.Option),
+		Callee:          optionCallee(snapshot.Option),
+		Offer:           optionOffer(snapshot.Option),
+		Answer:          snapshot.Answer,
+		HangupReason:    closeInfo.Reason,
+		HangupInitiator: closeInfo.Initiator,
+		Error:           closeInfo.Err,
+		Commands:        commands,
+		DumpEventFile:   dumpPath(dumpWriter),
+	}
+}
+
+func optionCaller(option *wsproto.CallOption) string {
+	if option == nil || option.Caller == nil {
+		return ""
+	}
+	return *option.Caller
+}
+
+func optionCallee(option *wsproto.CallOption) string {
+	if option == nil || option.Callee == nil {
+		return ""
+	}
+	return *option.Callee
+}
+
+func optionOffer(option *wsproto.CallOption) string {
+	if option == nil || option.Offer == nil {
+		return ""
+	}
+	return *option.Offer
+}
+
+func dumpPath(writer *callrecord.DumpWriter) string {
+	if writer == nil {
+		return ""
+	}
+	return writer.Path()
 }
