@@ -79,20 +79,39 @@ type aliyunRecognitionResponse struct {
 }
 
 type aliyunRecognitionHeader struct {
-	TaskID  string `json:"task_id"`
-	Message string `json:"message"`
-	Status  string `json:"status"`
+	Namespace  string `json:"namespace"`
+	Name       string `json:"name"`
+	TaskID     string `json:"task_id"`
+	MessageID  string `json:"message_id"`
+	Status     int64  `json:"status"`
+	StatusText string `json:"status_text"`
 }
 
 type aliyunRecognitionPayload struct {
-	Result        string `json:"result"`
-	SentenceID    uint32 `json:"sentence_id"`
-	SentenceEnd   bool   `json:"is_sentence_end"`
-	BeginTime     int64  `json:"begin_time"`
-	EndTime       int64  `json:"end_time"`
-	Confidence    int64  `json:"confidence,omitempty"`
-	Words         any    `json:"words,omitempty"`
-	SentenceBegin *int64 `json:"sentence_begin_time,omitempty"`
+	Index          int64                   `json:"index"`
+	Time           int64                   `json:"time"`
+	Result         string                  `json:"result"`
+	Confidence     float64                 `json:"confidence,omitempty"`
+	Words          any                     `json:"words,omitempty"`
+	Status         int64                   `json:"status,omitempty"`
+	Gender         string                  `json:"gender,omitempty"`
+	BeginTime      int64                   `json:"begin_time"`
+	FixedResult    string                  `json:"fixed_result,omitempty"`
+	UnfixedResult  string                  `json:"unfixed_result,omitempty"`
+	StashResult    *aliyunRecognitionStash `json:"stash_result,omitempty"`
+	AudioExtraInfo string                  `json:"audio_extra_info,omitempty"`
+	SentenceID     string                  `json:"sentence_id,omitempty"`
+	GenderScore    float64                 `json:"gender_score,omitempty"`
+}
+
+type aliyunRecognitionStash struct {
+	SentenceID  int64  `json:"sentenceId"`
+	BeginTime   int64  `json:"beginTime"`
+	Text        string `json:"text"`
+	FixedText   string `json:"fixedText"`
+	UnfixedText string `json:"unfixedText"`
+	CurrentTime int64  `json:"currentTime"`
+	Words       any    `json:"words"`
 }
 
 // WriteAudio 会在第一次音频进入时启动实时识别，然后持续发送音频并把已收到的回调结果拉平给上层处理器。
@@ -325,26 +344,33 @@ func parseAliyunResult(raw string, final bool) (Result, bool) {
 	if err := json.Unmarshal([]byte(trimmed), &response); err != nil {
 		return Result{}, false
 	}
-	if !strings.EqualFold(response.Header.Status, "success") {
+	if response.Header.Status != 20000000 {
 		return Result{}, false
 	}
 	if response.Payload == nil {
 		return Result{}, false
 	}
 	text := strings.TrimSpace(response.Payload.Result)
+	if text == "" && response.Payload.StashResult != nil {
+		text = strings.TrimSpace(response.Payload.StashResult.Text)
+	}
 	if text == "" {
 		return Result{}, false
 	}
-	final = final || response.Payload.SentenceEnd
+	final = final || strings.EqualFold(response.Header.Name, "SentenceEnd")
 	startTime := response.Payload.BeginTime
-	if response.Payload.SentenceBegin != nil {
-		startTime = *response.Payload.SentenceBegin
+	if startTime == 0 && response.Payload.StashResult != nil {
+		startTime = response.Payload.StashResult.BeginTime
+	}
+	endTime := response.Payload.Time
+	if endTime == 0 {
+		endTime = startTime
 	}
 	return Result{
 		Final:     final,
 		Text:      text,
 		StartTime: startTime,
-		EndTime:   response.Payload.EndTime,
+		EndTime:   endTime,
 	}, true
 }
 
