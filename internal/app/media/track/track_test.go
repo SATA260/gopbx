@@ -4,9 +4,13 @@ package track
 
 import (
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 	"time"
+
+	ttsadapter "gopbx/internal/adapter/outbound/tts"
+	"gopbx/pkg/wsproto"
 
 	"github.com/pion/webrtc/v4"
 )
@@ -86,3 +90,53 @@ func TestFileTrackTrackIDAndMetricsData(t *testing.T) {
 		t.Fatalf("unexpected file metrics: %v", metrics)
 	}
 }
+
+func TestWebRTCTrackPlayTTS(t *testing.T) {
+	peer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Fatalf("create client peer: %v", err)
+	}
+	defer peer.Close()
+	if _, err := peer.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio); err != nil {
+		t.Fatalf("add client transceiver: %v", err)
+	}
+	offer, err := peer.CreateOffer(nil)
+	if err != nil {
+		t.Fatalf("create offer: %v", err)
+	}
+	if err := peer.SetLocalDescription(offer); err != nil {
+		t.Fatalf("set local description: %v", err)
+	}
+	track := NewWebRTCTrack("webrtc-tts", offer.SDP, "pcmu", nil, nil, nil, nil)
+	answer, err := track.BuildAnswer()
+	if err != nil {
+		t.Fatalf("build answer: %v", err)
+	}
+	if err := peer.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: answer}); err != nil {
+		t.Fatalf("set remote answer: %v", err)
+	}
+
+	stream := &stubTTSStream{chunks: []ttsadapter.Chunk{{Data: []byte{0x01, 0x02, 0x03}}}}
+	audioBytes, chunkCount, err := track.PlayTTS("track-1", &wsproto.SynthesisOption{}, stream)
+	if err != nil {
+		t.Fatalf("play tts: %v", err)
+	}
+	if audioBytes == 0 || chunkCount != 1 {
+		t.Fatalf("unexpected audio stats: bytes=%d chunks=%d", audioBytes, chunkCount)
+	}
+}
+
+type stubTTSStream struct {
+	chunks []ttsadapter.Chunk
+}
+
+func (s *stubTTSStream) Recv() (ttsadapter.Chunk, error) {
+	if len(s.chunks) == 0 {
+		return ttsadapter.Chunk{}, io.EOF
+	}
+	chunk := s.chunks[0]
+	s.chunks = s.chunks[1:]
+	return chunk, nil
+}
+
+func (s *stubTTSStream) Close() error { return nil }

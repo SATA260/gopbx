@@ -162,6 +162,9 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		return nil
 	}
 	webrtcTrack = builtWebRTCTrack
+	if webrtcTrack != nil {
+		activeSession.BindTTSSink(webrtcTrack)
+	}
 	answer := wsproto.EventEnvelope{
 		Event:     compat.EventAnswer,
 		TrackID:   activeSession.ID,

@@ -10,11 +10,13 @@ import (
 	"sync"
 	"time"
 
+	ttsadapter "gopbx/internal/adapter/outbound/tts"
 	"gopbx/internal/app/media/codec"
 	mediastream "gopbx/internal/app/media/stream"
 	"gopbx/pkg/wsproto"
 
 	"github.com/pion/webrtc/v4"
+	"github.com/pion/webrtc/v4/pkg/media"
 )
 
 type WebRTCTrack struct {
@@ -28,6 +30,7 @@ type WebRTCTrack struct {
 	onError    func(error)
 
 	peer       *webrtc.PeerConnection
+	outbound   *webrtc.TrackLocalStaticSample
 	answer     string
 	candidates []string
 }
@@ -69,13 +72,23 @@ func (t *WebRTCTrack) BuildAnswer() (string, error) {
 		return "", err
 	}
 
-	// 当前阶段先以接收音频为主，后续真实 TTS 出站时再把发送轨补到同一个 PeerConnection 上。
-	if _, err := peer.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio, webrtc.RTPTransceiverInit{
-		Direction: webrtc.RTPTransceiverDirectionRecvonly,
-	}); err != nil {
+	outbound, err := webrtc.NewTrackLocalStaticSample(outboundCodecCapability(t.Codec), "tts", t.ID+"-tts")
+	if err != nil {
 		_ = peer.Close()
 		return "", err
 	}
+	transceiver, err := peer.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio, webrtc.RTPTransceiverInit{
+		Direction: webrtc.RTPTransceiverDirectionSendrecv,
+	})
+	if err != nil {
+		_ = peer.Close()
+		return "", err
+	}
+	if err := transceiver.Sender().ReplaceTrack(outbound); err != nil {
+		_ = peer.Close()
+		return "", err
+	}
+	go drainSenderRTCP(transceiver.Sender())
 	peer.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 		go t.consumeRemoteTrack(remote)
 	})
@@ -108,6 +121,7 @@ func (t *WebRTCTrack) BuildAnswer() (string, error) {
 	}
 	t.mu.Lock()
 	t.peer = peer
+	t.outbound = outbound
 	t.answer = local.SDP
 	t.mu.Unlock()
 	return t.answer, nil
@@ -156,11 +170,50 @@ func (t *WebRTCTrack) Close() error {
 	t.mu.Lock()
 	peer := t.peer
 	t.peer = nil
+	t.outbound = nil
 	t.mu.Unlock()
 	if peer == nil {
 		return nil
 	}
 	return peer.Close()
+}
+
+// PlayTTS 会把合成得到的音频流写入 WebRTC 本地发送轨。
+// 当前阶段只为 WebRTC 会话提供真实音频输出，普通 websocket 会话仍然只保留事件兼容行为。
+func (t *WebRTCTrack) PlayTTS(trackID string, option *wsproto.SynthesisOption, stream ttsadapter.Stream) (audioBytes int, chunkCount int, err error) {
+	if t == nil || stream == nil {
+		return 0, 0, errors.New("webrtc tts stream is nil")
+	}
+	t.mu.Lock()
+	outbound := t.outbound
+	codecType := t.Codec
+	t.mu.Unlock()
+	if outbound == nil {
+		return 0, 0, errors.New("webrtc outbound track is not ready")
+	}
+	defer func() {
+		closeErr := stream.Close()
+		if err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+	for {
+		chunk, recvErr := stream.Recv()
+		if recvErr != nil {
+			if errors.Is(recvErr, io.EOF) {
+				return audioBytes, chunkCount, err
+			}
+			return audioBytes, chunkCount, recvErr
+		}
+		if len(chunk.Data) == 0 {
+			continue
+		}
+		audioBytes += len(chunk.Data)
+		chunkCount++
+		if writeErr := outbound.WriteSample(media.Sample{Data: chunk.Data, Duration: sampleDuration(codecType, len(chunk.Data), option)}); writeErr != nil {
+			return audioBytes, chunkCount, writeErr
+		}
+	}
 }
 
 // consumeRemoteTrack 会持续读取远端 RTP 包，并把 payload 作为上行音频送入处理链。
@@ -228,4 +281,41 @@ func parseCandidate(raw string) (webrtc.ICECandidateInit, error) {
 	mid := "0"
 	line := uint16(0)
 	return webrtc.ICECandidateInit{Candidate: trimmed, SDPMid: &mid, SDPMLineIndex: &line}, nil
+}
+
+func outboundCodecCapability(kind codec.Type) webrtc.RTPCodecCapability {
+	switch kind {
+	case codec.PCMA:
+		return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMA, ClockRate: 8000, Channels: 1}
+	case codec.G722:
+		return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeG722, ClockRate: 8000, Channels: 1}
+	default:
+		return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000, Channels: 1}
+	}
+}
+
+func sampleDuration(kind codec.Type, size int, option *wsproto.SynthesisOption) time.Duration {
+	if size <= 0 {
+		return 20 * time.Millisecond
+	}
+	sampleRate := codec.New(string(kind)).SampleRate()
+	if option != nil && option.Samplerate != nil && *option.Samplerate > 0 {
+		sampleRate = int(*option.Samplerate)
+	}
+	if sampleRate <= 0 {
+		sampleRate = 8000
+	}
+	return time.Second * time.Duration(size) / time.Duration(sampleRate)
+}
+
+func drainSenderRTCP(sender *webrtc.RTPSender) {
+	if sender == nil {
+		return
+	}
+	buf := make([]byte, 1500)
+	for {
+		if _, _, err := sender.Read(buf); err != nil {
+			return
+		}
+	}
 }

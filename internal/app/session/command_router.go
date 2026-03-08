@@ -36,7 +36,7 @@ func (r *CommandRouter) Route(s *Session, cmd *wsproto.CommandEnvelope) CommandR
 		ttsTrack := mediatrack.NewTTSTrack(trackID, cmd.Text, cmd.Speaker, cmd.PlayID)
 		provider := resolveTTSProvider(s, cmd)
 		option := resolveTTSOption(s, cmd)
-		audioBytes, chunkCount, err := synthesizeTTS(provider, cmd.Text, option)
+		audioBytes, chunkCount, err := synthesizeTTS(s, provider, ttsTrack.TrackID(), cmd.Text, option)
 		if err != nil {
 			s.ClearTrack()
 			return CommandResult{Events: []wsproto.EventEnvelope{
@@ -219,10 +219,16 @@ func resolveTTSOption(s *Session, cmd *wsproto.CommandEnvelope) *wsproto.Synthes
 
 // synthesizeTTS 会把 provider 输出的音频流完整消费掉，并统计字节数与 chunk 数。
 // 当前阶段还没有把这些音频真正送到客户端，所以这里先以“安全消费 + 统计”为主，为下一步真实出音留接口。
-func synthesizeTTS(provider ttsadapter.Provider, text string, option *wsproto.SynthesisOption) (audioBytes int, chunkCount int, err error) {
+
+// synthesizeTTS 会根据当前会话类型选择音频输出方式。
+// 现在只有 WebRTC 会绑定真实音频 sink，因此真实音频输出只会走 WebRTC；其他会话只消费流并统计，保持协议兼容。
+func synthesizeTTS(s *Session, provider ttsadapter.Provider, trackID, text string, option *wsproto.SynthesisOption) (audioBytes int, chunkCount int, err error) {
 	stream, err := provider.StartSynthesis(text, option)
 	if err != nil {
 		return 0, 0, err
+	}
+	if sink := s.TTSSink(); sink != nil {
+		return sink.PlayTTS(trackID, option, stream)
 	}
 	defer func() {
 		closeErr := stream.Close()

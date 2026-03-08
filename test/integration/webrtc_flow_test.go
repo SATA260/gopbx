@@ -172,6 +172,95 @@ func TestWebRTCAudioProducesASRFinal(t *testing.T) {
 	expectClose(t, conn)
 }
 
+func TestWebRTCTTSProducesOutboundAudio(t *testing.T) {
+	_, server := newIntegrationServer(t)
+	conn := dialCallWS(t, server.URL, compat.RouteCallWebRTC, "webrtc-tts-session")
+
+	peer, _, err := newWebRTCPeer(false)
+	if err != nil {
+		t.Fatalf("create tts peer connection: %v", err)
+	}
+	defer peer.Close()
+
+	remoteTrackCh := make(chan *webrtc.TrackRemote, 1)
+	peer.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		remoteTrackCh <- remote
+	})
+
+	candidateCh := make(chan string, 8)
+	peer.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+		if candidate == nil {
+			return
+		}
+		data, err := json.Marshal(candidate.ToJSON())
+		if err == nil {
+			candidateCh <- string(data)
+		}
+	})
+
+	offer, err := peer.CreateOffer(nil)
+	if err != nil {
+		t.Fatalf("create tts offer: %v", err)
+	}
+	if err := peer.SetLocalDescription(offer); err != nil {
+		t.Fatalf("set local description: %v", err)
+	}
+	if err := conn.WriteJSON(map[string]any{
+		"command": "invite",
+		"option": map[string]any{
+			"offer": offer.SDP,
+			"codec": "pcmu",
+		},
+	}); err != nil {
+		t.Fatalf("send webrtc tts invite: %v", err)
+	}
+	answer := readEvent(t, conn)
+	requireEventName(t, answer, compat.EventAnswer)
+	sdp, _ := answer["sdp"].(string)
+	if err := peer.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdp}); err != nil {
+		t.Fatalf("set remote answer: %v", err)
+	}
+	select {
+	case candidateJSON := <-candidateCh:
+		if err := conn.WriteJSON(map[string]any{"command": "candidate", "candidates": []string{candidateJSON}}); err != nil {
+			t.Fatalf("send candidate command: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected candidate for tts webrtc peer")
+	}
+	waitPeerConnectionConnected(t, peer)
+
+	if err := conn.WriteJSON(map[string]any{
+		"command": "tts",
+		"text":    "hello from webrtc",
+		"option": map[string]any{
+			"provider": "mock",
+		},
+	}); err != nil {
+		t.Fatalf("send tts command: %v", err)
+	}
+	requireEventName(t, readEvent(t, conn), compat.EventTrackStart)
+	requireEventName(t, readEvent(t, conn), compat.EventMetrics)
+	requireEventName(t, readEvent(t, conn), compat.EventMetrics)
+	requireEventName(t, readEvent(t, conn), compat.EventTrackEnd)
+
+	var remoteTrack *webrtc.TrackRemote
+	select {
+	case remoteTrack = <-remoteTrackCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected outbound webrtc audio track from server tts")
+	}
+	if _, _, err := remoteTrack.ReadRTP(); err != nil {
+		t.Fatalf("read outbound tts RTP packet: %v", err)
+	}
+
+	if err := conn.WriteJSON(map[string]any{"command": "hangup"}); err != nil {
+		t.Fatalf("send cleanup hangup: %v", err)
+	}
+	requireEventName(t, readEvent(t, conn), compat.EventHangup)
+	expectClose(t, conn)
+}
+
 func newWebRTCPeer(withAudioTrack bool) (*webrtc.PeerConnection, *webrtc.TrackLocalStaticRTP, error) {
 	peer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
 	if err != nil {

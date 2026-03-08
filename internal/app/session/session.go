@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	ttsadapter "gopbx/internal/adapter/outbound/tts"
 	"gopbx/pkg/wsproto"
 )
 
@@ -58,6 +59,13 @@ type Session struct {
 	done           chan struct{}
 	trackSeq       uint64
 	currentTrackID string
+	ttsSink        TTSSink
+}
+
+// TTSSink 表示会话级的音频输出能力。
+// 当前只在 WebRTC 会话里绑定真实出站音轨，普通 websocket 会话不会绑定这个 sink。
+type TTSSink interface {
+	PlayTTS(trackID string, option *wsproto.SynthesisOption, stream ttsadapter.Stream) (audioBytes int, chunkCount int, err error)
 }
 
 type Snapshot struct {
@@ -276,6 +284,18 @@ func (s *Session) CurrentTrackID() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.currentTrackID
+}
+
+func (s *Session) BindTTSSink(sink TTSSink) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ttsSink = sink
+}
+
+func (s *Session) TTSSink() TTSSink {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ttsSink
 }
 
 // Snapshot 返回一份可安全跨协程使用的会话快照，避免清理阶段直接暴露会话内部锁保护的数据结构。
