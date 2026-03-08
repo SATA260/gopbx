@@ -208,9 +208,13 @@ func (t *WebRTCTrack) PlayTTS(trackID string, option *wsproto.SynthesisOption, s
 		if len(chunk.Data) == 0 {
 			continue
 		}
-		audioBytes += len(chunk.Data)
+		encoded := encodeTTSChunk(codecType, chunk.Data)
+		if len(encoded) == 0 {
+			continue
+		}
+		audioBytes += len(encoded)
 		chunkCount++
-		if writeErr := outbound.WriteSample(media.Sample{Data: chunk.Data, Duration: sampleDuration(codecType, len(chunk.Data), option)}); writeErr != nil {
+		if writeErr := outbound.WriteSample(media.Sample{Data: encoded, Duration: sampleDuration(codecType, len(encoded), option)}); writeErr != nil {
 			return audioBytes, chunkCount, writeErr
 		}
 	}
@@ -305,7 +309,17 @@ func sampleDuration(kind codec.Type, size int, option *wsproto.SynthesisOption) 
 	if sampleRate <= 0 {
 		sampleRate = 8000
 	}
-	return time.Second * time.Duration(size) / time.Duration(sampleRate)
+	bytesPerSample := 1
+	if kind == codec.PCMU || kind == codec.PCMA {
+		bytesPerSample = 1
+	} else {
+		bytesPerSample = 2
+	}
+	sampleCount := size / bytesPerSample
+	if sampleCount == 0 {
+		sampleCount = 1
+	}
+	return time.Second * time.Duration(sampleCount) / time.Duration(sampleRate)
 }
 
 func drainSenderRTCP(sender *webrtc.RTPSender) {
@@ -318,4 +332,10 @@ func drainSenderRTCP(sender *webrtc.RTPSender) {
 			return
 		}
 	}
+}
+
+// encodeTTSChunk 会把 provider 输出的 PCM 数据转成当前 WebRTC 出站 codec 所需的编码。
+// 目前优先补全 G.711 路径；G722 还没有真实编码器时先保持透传，避免破坏已经可用的链路。
+func encodeTTSChunk(kind codec.Type, payload []byte) []byte {
+	return codec.New(string(kind)).Encode(payload)
 }

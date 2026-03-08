@@ -2,7 +2,10 @@
 
 package codec
 
-import "strings"
+import (
+	"encoding/binary"
+	"strings"
+)
 
 type Type string
 
@@ -48,4 +51,29 @@ func cloneBytes(src []byte) []byte {
 	dst := make([]byte, len(src))
 	copy(dst, src)
 	return dst
+}
+
+// pcmBytesToSamples 把 little-endian PCM 字节流切成 int16 样本。
+// 如果字节数为奇数，尾部残字节会被忽略，避免编码时读出越界样本。
+func pcmBytesToSamples(payload []byte) []int16 {
+	if len(payload) < 2 {
+		return nil
+	}
+	count := len(payload) / 2
+	samples := make([]int16, count)
+	for i := 0; i < count; i++ {
+		samples[i] = int16(binary.LittleEndian.Uint16(payload[i*2:]))
+	}
+	return samples
+}
+
+func pcmSamplesToBytes(samples []int16) []byte {
+	if len(samples) == 0 {
+		return nil
+	}
+	payload := make([]byte, len(samples)*2)
+	for i, sample := range samples {
+		binary.LittleEndian.PutUint16(payload[i*2:], uint16(sample))
+	}
+	return payload
 }

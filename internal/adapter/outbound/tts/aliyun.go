@@ -31,7 +31,7 @@ func (AliyunProvider) StartSynthesis(text string, cfg *wsproto.SynthesisOption) 
 		return nil, err
 	}
 	if config == nil {
-		return &mockStream{chunks: []Chunk{{Data: []byte("aliyun-tts:" + text)}}}, nil
+		return &mockStream{chunks: []Chunk{{Data: mockPCM(text)}}}, nil
 	}
 
 	logger := nls.NewNlsLogger(io.Discard, "gopbx-aliyun-tts", log.LstdFlags|log.Lmicroseconds)
@@ -184,8 +184,15 @@ func newAliyunSynthesisConfig(cfg *wsproto.SynthesisOption) (*nls.ConnectionConf
 	if cfg.Speaker != nil && strings.TrimSpace(*cfg.Speaker) != "" {
 		param.Voice = strings.TrimSpace(*cfg.Speaker)
 	}
+	param.Format = "pcm"
 	if cfg.Codec != nil && strings.TrimSpace(*cfg.Codec) != "" {
-		param.Format = strings.TrimSpace(*cfg.Codec)
+		switch strings.ToLower(strings.TrimSpace(*cfg.Codec)) {
+		case "pcm", "wav":
+			param.Format = strings.ToLower(strings.TrimSpace(*cfg.Codec))
+		default:
+			// WebRTC 出站 codec 由本地编码器处理，这里统一向阿里云请求 PCM，避免 provider 和传输 codec 混在一起。
+			param.Format = "pcm"
+		}
 	}
 	if cfg.Samplerate != nil && *cfg.Samplerate > 0 {
 		param.SampleRate = int(*cfg.Samplerate)
