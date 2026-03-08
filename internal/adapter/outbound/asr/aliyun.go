@@ -5,7 +5,6 @@ package asr
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"strings"
@@ -70,6 +69,30 @@ type aliyunSession struct {
 	started    bool
 	closed     bool
 	lastErr    error
+}
+
+// aliyunRecognitionResponse 按阿里云实时识别回包结构定义，避免继续依赖宽松 map 解析。
+// 这样后面如果字段缺失或协议变更，能够更早暴露问题，而不是静默吞掉不兼容字段。
+type aliyunRecognitionResponse struct {
+	Header  aliyunRecognitionHeader   `json:"header"`
+	Payload *aliyunRecognitionPayload `json:"payload,omitempty"`
+}
+
+type aliyunRecognitionHeader struct {
+	TaskID  string `json:"task_id"`
+	Message string `json:"message"`
+	Status  string `json:"status"`
+}
+
+type aliyunRecognitionPayload struct {
+	Result        string `json:"result"`
+	SentenceID    uint32 `json:"sentence_id"`
+	SentenceEnd   bool   `json:"is_sentence_end"`
+	BeginTime     int64  `json:"begin_time"`
+	EndTime       int64  `json:"end_time"`
+	Confidence    int64  `json:"confidence,omitempty"`
+	Words         any    `json:"words,omitempty"`
+	SentenceBegin *int64 `json:"sentence_begin_time,omitempty"`
 }
 
 // WriteAudio 会在第一次音频进入时启动实时识别，然后持续发送音频并把已收到的回调结果拉平给上层处理器。
@@ -298,58 +321,31 @@ func parseAliyunResult(raw string, final bool) (Result, bool) {
 		return Result{}, false
 	}
 
-	var response nls.CommonResponse
+	var response aliyunRecognitionResponse
 	if err := json.Unmarshal([]byte(trimmed), &response); err != nil {
-		return Result{Final: final, Text: trimmed}, true
+		return Result{}, false
 	}
-	text := extractAliyunText(response.Payload)
+	if !strings.EqualFold(response.Header.Status, "success") {
+		return Result{}, false
+	}
+	if response.Payload == nil {
+		return Result{}, false
+	}
+	text := strings.TrimSpace(response.Payload.Result)
 	if text == "" {
 		return Result{}, false
+	}
+	final = final || response.Payload.SentenceEnd
+	startTime := response.Payload.BeginTime
+	if response.Payload.SentenceBegin != nil {
+		startTime = *response.Payload.SentenceBegin
 	}
 	return Result{
 		Final:     final,
 		Text:      text,
-		StartTime: extractAliyunInt(response.Payload, "begin_time", "start_time", "beginTime", "startTime"),
-		EndTime:   extractAliyunInt(response.Payload, "end_time", "endTime"),
+		StartTime: startTime,
+		EndTime:   response.Payload.EndTime,
 	}, true
-}
-
-func extractAliyunText(payload map[string]interface{}) string {
-	if payload == nil {
-		return ""
-	}
-	for _, key := range []string{"result", "text", "sentence", "transcript"} {
-		if value, ok := payload[key].(string); ok && strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
-}
-
-func extractAliyunInt(payload map[string]interface{}, keys ...string) int64 {
-	if payload == nil {
-		return 0
-	}
-	for _, key := range keys {
-		value, ok := payload[key]
-		if !ok {
-			continue
-		}
-		switch typed := value.(type) {
-		case float64:
-			return int64(typed)
-		case int64:
-			return typed
-		case int:
-			return int64(typed)
-		case string:
-			var parsed int64
-			if _, err := fmt.Sscan(strings.TrimSpace(typed), &parsed); err == nil {
-				return parsed
-			}
-		}
-	}
-	return 0
 }
 
 func waitReady(ch chan bool, logger *nls.NlsLogger, timeout time.Duration) error {
