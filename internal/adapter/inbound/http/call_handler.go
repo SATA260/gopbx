@@ -345,13 +345,17 @@ func buildWebRTCAudioTrack(s *session.Session, offer, codecName string, iceServe
 func buildAudioStream(s *session.Session) *stream.Stream {
 	snapshot := s.Snapshot()
 	providerName := ""
+	var asrConfig *wsproto.ASRConfig
 	if snapshot.Option != nil && snapshot.Option.ASR != nil && snapshot.Option.ASR.Provider != nil {
+		asrConfig = snapshot.Option.ASR
 		providerName = *snapshot.Option.ASR.Provider
+	} else if snapshot.Option != nil {
+		asrConfig = snapshot.Option.ASR
 	}
 	chain := processor.NewChain(
 		processor.NewDenoise(),
 		processor.NewVAD(),
-		processor.NewASR(s.ID, asroutbound.ResolveProvider(providerName)),
+		processor.NewASR(s.ID, asroutbound.ResolveProvider(providerName), asrConfig),
 		processor.NewRecorder(),
 	)
 	return stream.New(s.ID, chain)

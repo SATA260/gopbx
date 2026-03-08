@@ -1,13 +1,13 @@
-// 这个文件实现阿里云 ASR 兼容适配器，当前先提供稳定的 mock 转写结果和 provider 标识。
+// 这个文件实现阿里云 ASR 兼容适配器，当前先提供会话型 mock 识别结果，后续替换成真实实时识别客户端。
 
 package asr
 
-import "fmt"
+import "gopbx/pkg/wsproto"
 
 type AliyunProvider struct{}
 
-func (AliyunProvider) Name() string { return "aliyun" }
+func (AliyunProvider) Name() string { return ProviderAliyun }
 
-func (AliyunProvider) Transcribe(_ []byte, index uint32) string {
-	return fmt.Sprintf("aliyun asr final %d", index)
+func (AliyunProvider) NewSession(_ *wsproto.ASRConfig) (Session, error) {
+	return &mockSession{provider: ProviderAliyun}, nil
 }

@@ -33,10 +33,15 @@ func (s *Stream) Push(packet Packet) []protocol.Event {
 	return chain.Process(mediaentity.Packet{TrackID: packet.TrackID, Data: packet.Data})
 }
 
+// Close 会先把流标记为关闭，再把处理器链里的会话资源一并释放。
 func (s *Stream) Close() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	chain := s.chain
 	s.closed = true
+	s.mu.Unlock()
+	if chain != nil {
+		_ = chain.Close()
+	}
 }
 
 func (s *Stream) ID() string {

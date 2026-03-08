@@ -12,6 +12,10 @@ type Processor interface {
 	Process(mediaentity.Packet) []protocol.Event
 }
 
+type Closer interface {
+	Close() error
+}
+
 type Chain struct {
 	processors []Processor
 }
@@ -41,4 +45,23 @@ func (c *Chain) Process(packet mediaentity.Packet) []protocol.Event {
 		events = append(events, processor.Process(packet)...)
 	}
 	return events
+}
+
+// Close 会依次关闭支持收尾的处理器。
+// 会话型 ASR 在这里释放底层 session，避免连接已经结束但上游流式识别还悬挂着。
+func (c *Chain) Close() error {
+	if c == nil {
+		return nil
+	}
+	var firstErr error
+	for _, processor := range c.processors {
+		closer, ok := processor.(Closer)
+		if !ok {
+			continue
+		}
+		if err := closer.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
