@@ -24,6 +24,7 @@ func TestWebRTCCallNegotiatesRealAnswerAndAcceptsCandidates(t *testing.T) {
 		t.Fatalf("create client peer connection: %v", err)
 	}
 	defer peer.Close()
+	setClientAudioCodecPreferences(t, peer)
 
 	candidateCh := make(chan string, 8)
 	peer.OnICECandidate(func(candidate *webrtc.ICECandidate) {
@@ -65,6 +66,12 @@ func TestWebRTCCallNegotiatesRealAnswerAndAcceptsCandidates(t *testing.T) {
 	if !strings.Contains(sdp, "a=fingerprint:") || !strings.Contains(sdp, "a=ice-ufrag:") {
 		t.Fatalf("expected real webrtc answer with fingerprint and ice ufrag, got: %s", sdp)
 	}
+	if !strings.Contains(strings.ToLower(sdp), "pcmu/8000") || !strings.Contains(strings.ToLower(sdp), "pcma/8000") {
+		t.Fatalf("expected answer to advertise g711 codecs, got: %s", sdp)
+	}
+	if strings.Contains(strings.ToLower(sdp), "opus/48000") || strings.Contains(strings.ToLower(sdp), "g722") {
+		t.Fatalf("expected answer to exclude unsupported codecs, got: %s", sdp)
+	}
 
 	if err := peer.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdp}); err != nil {
 		t.Fatalf("set remote answer: %v", err)
@@ -102,6 +109,7 @@ func TestWebRTCAudioProducesASRFinal(t *testing.T) {
 		t.Fatalf("create audio peer connection: %v", err)
 	}
 	defer peer.Close()
+	setClientAudioCodecPreferences(t, peer)
 
 	candidateCh := make(chan string, 8)
 	peer.OnICECandidate(func(candidate *webrtc.ICECandidate) {
@@ -183,6 +191,7 @@ func TestWebRTCTTSProducesOutboundAudio(t *testing.T) {
 		t.Fatalf("create tts peer connection: %v", err)
 	}
 	defer peer.Close()
+	setClientAudioCodecPreferences(t, peer)
 
 	remoteTrackCh := make(chan *webrtc.TrackRemote, 1)
 	peer.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
@@ -263,8 +272,52 @@ func TestWebRTCTTSProducesOutboundAudio(t *testing.T) {
 	expectClose(t, conn)
 }
 
+func TestWebRTCCallAllowsRequestedPCMACodec(t *testing.T) {
+	_, server := newIntegrationServer(t)
+	conn := dialCallWS(t, server.URL, compat.RouteCallWebRTC, "webrtc-pcma-session")
+
+	peer, _, err := newWebRTCPeer(false)
+	if err != nil {
+		t.Fatalf("create client peer connection: %v", err)
+	}
+	defer peer.Close()
+	setClientAudioCodecPreferences(t, peer)
+
+	offer, err := peer.CreateOffer(nil)
+	if err != nil {
+		t.Fatalf("create offer: %v", err)
+	}
+	if err := peer.SetLocalDescription(offer); err != nil {
+		t.Fatalf("set local description: %v", err)
+	}
+	if err := conn.WriteJSON(map[string]any{
+		"command": "invite",
+		"option": map[string]any{
+			"offer": offer.SDP,
+			"codec": "pcma",
+		},
+	}); err != nil {
+		t.Fatalf("send pcma invite: %v", err)
+	}
+	answer := readEvent(t, conn)
+	requireEventName(t, answer, compat.EventAnswer)
+	sdp, _ := answer["sdp"].(string)
+	lower := strings.ToLower(sdp)
+	pcmaIndex := strings.Index(lower, "a=rtpmap:8 pcma/8000")
+	pcmuIndex := strings.Index(lower, "a=rtpmap:0 pcmu/8000")
+	if pcmaIndex == -1 || pcmuIndex == -1 {
+		t.Fatalf("expected both pcma and pcmu in answer, got: %s", sdp)
+	}
+
+	if err := conn.WriteJSON(map[string]any{"command": "hangup"}); err != nil {
+		t.Fatalf("send cleanup hangup: %v", err)
+	}
+	requireEventName(t, readEvent(t, conn), compat.EventHangup)
+	expectClose(t, conn)
+}
+
 func newWebRTCPeer(withAudioTrack bool) (*webrtc.PeerConnection, *webrtc.TrackLocalStaticRTP, error) {
-	peer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	peer, err := newPeerConnectionWithG711()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -280,11 +333,59 @@ func newWebRTCPeer(withAudioTrack bool) (*webrtc.PeerConnection, *webrtc.TrackLo
 		}
 		return peer, track, nil
 	}
-	if _, err := peer.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio); err != nil {
+	transceiver, err := peer.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio)
+	if err != nil {
+		peer.Close()
+		return nil, nil, err
+	}
+	if err := transceiver.SetCodecPreferences(clientAudioCodecPreferences()); err != nil {
 		peer.Close()
 		return nil, nil, err
 	}
 	return peer, nil, nil
+}
+
+func setClientAudioCodecPreferences(t *testing.T, peer *webrtc.PeerConnection) {
+	t.Helper()
+	for _, transceiver := range peer.GetTransceivers() {
+		if transceiver.Kind() != webrtc.RTPCodecTypeAudio {
+			continue
+		}
+		if err := transceiver.SetCodecPreferences(clientAudioCodecPreferences()); err != nil {
+			t.Fatalf("set client codec preferences: %v", err)
+		}
+	}
+}
+
+func clientAudioCodecPreferences() []webrtc.RTPCodecParameters {
+	return []webrtc.RTPCodecParameters{
+		{
+			RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000, Channels: 1},
+			PayloadType:        0,
+		},
+		{
+			RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMA, ClockRate: 8000, Channels: 1},
+			PayloadType:        8,
+		},
+	}
+}
+
+func newPeerConnectionWithG711() (*webrtc.PeerConnection, error) {
+	mediaEngine := &webrtc.MediaEngine{}
+	if err := mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000, Channels: 1},
+		PayloadType:        0,
+	}, webrtc.RTPCodecTypeAudio); err != nil {
+		return nil, err
+	}
+	if err := mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMA, ClockRate: 8000, Channels: 1},
+		PayloadType:        8,
+	}, webrtc.RTPCodecTypeAudio); err != nil {
+		return nil, err
+	}
+	api := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine))
+	return api.NewPeerConnection(webrtc.Configuration{})
 }
 
 func waitPeerConnectionConnected(t *testing.T, peer *webrtc.PeerConnection) {

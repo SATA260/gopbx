@@ -64,7 +64,7 @@ func (t *WebRTCTrack) BuildAnswer() (string, error) {
 	}
 
 	mediaEngine := &webrtc.MediaEngine{}
-	if err := mediaEngine.RegisterDefaultCodecs(); err != nil {
+	if err := registerSupportedAudioCodecs(mediaEngine); err != nil {
 		return "", err
 	}
 	api := webrtc.NewAPI(webrtc.WithMediaEngine(mediaEngine))
@@ -347,6 +347,25 @@ func drainSenderRTCP(sender *webrtc.RTPSender) {
 // 当前只保留 G.711 路径，其他 codec 会被解析层统一回退到 PCMU。
 func encodeTTSChunk(kind codec.Type, payload []byte) []byte {
 	return codec.New(string(kind)).Encode(payload)
+}
+
+func registerSupportedAudioCodecs(mediaEngine *webrtc.MediaEngine) error {
+	ordered := []webrtc.RTPCodecParameters{
+		{
+			RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000, Channels: 1},
+			PayloadType:        0,
+		},
+		{
+			RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMA, ClockRate: 8000, Channels: 1},
+			PayloadType:        8,
+		},
+	}
+	for _, item := range ordered {
+		if err := mediaEngine.RegisterCodec(item, webrtc.RTPCodecTypeAudio); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // normalizeInboundPayload 会把 WebRTC 入站音频统一成 16k PCM16 little-endian。
