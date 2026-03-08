@@ -22,7 +22,9 @@ type Result struct {
 // Session 表示一次会话级的流式识别上下文。
 // 实时语音识别需要跨多个音频包维护状态，因此这里不再用“单包输入、单次返回”的接口。
 type Session interface {
-	WriteAudio(payload []byte) ([]Result, error)
+	WriteAudio(payload []byte) error
+	Results() <-chan Result
+	Errors() <-chan error
 	Close() error
 }
 

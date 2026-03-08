@@ -28,7 +28,7 @@ func (AliyunProvider) NewSession(cfg *wsproto.ASRConfig) (Session, error) {
 		return nil, err
 	}
 	if config == nil {
-		return &mockSession{provider: ProviderAliyun}, nil
+		return &mockSession{provider: ProviderAliyun, results: make(chan Result, 16), errs: make(chan error, 4)}, nil
 	}
 
 	logger := nls.NewNlsLogger(io.Discard, "gopbx-aliyun-asr", log.LstdFlags|log.Lmicroseconds)
@@ -39,6 +39,8 @@ func (AliyunProvider) NewSession(cfg *wsproto.ASRConfig) (Session, error) {
 		logger:     logger,
 		startParam: startParam,
 		extra:      extra,
+		results:    make(chan Result, 32),
+		errs:       make(chan error, 8),
 	}
 	client, err := nls.NewSpeechTranscription(
 		config,
@@ -65,10 +67,11 @@ type aliyunSession struct {
 	logger     *nls.NlsLogger
 	startParam nls.SpeechTranscriptionStartParam
 	extra      map[string]interface{}
-	results    []Result
+	results    chan Result
+	errs       chan error
 	started    bool
+	closing    bool
 	closed     bool
-	lastErr    error
 }
 
 // aliyunRecognitionResponse 按阿里云实时识别回包结构定义，避免继续依赖宽松 map 解析。
@@ -115,36 +118,40 @@ type aliyunRecognitionStash struct {
 }
 
 // WriteAudio 会在第一次音频进入时启动实时识别，然后持续发送音频并把已收到的回调结果拉平给上层处理器。
-func (s *aliyunSession) WriteAudio(payload []byte) ([]Result, error) {
+func (s *aliyunSession) WriteAudio(payload []byte) error {
 	if len(payload) == 0 {
-		return nil, nil
+		return nil
 	}
 	if err := s.ensureStarted(); err != nil {
-		return nil, err
+		return err
 	}
 
 	s.mu.Lock()
-	if s.closed {
+	if s.closed || s.closing {
 		s.mu.Unlock()
-		return nil, nil
+		return nil
 	}
 	client := s.client
 	s.mu.Unlock()
 
 	if err := client.SendAudioData(payload); err != nil {
-		return nil, err
+		return err
 	}
-	return s.drainResults(), s.takeError()
+	return nil
 }
+
+func (s *aliyunSession) Results() <-chan Result { return s.results }
+
+func (s *aliyunSession) Errors() <-chan error { return s.errs }
 
 // Close 会停止阿里云实时识别会话并回收底层 websocket 连接。
 func (s *aliyunSession) Close() error {
 	s.mu.Lock()
-	if s.closed {
+	if s.closed || s.closing {
 		s.mu.Unlock()
 		return nil
 	}
-	s.closed = true
+	s.closing = true
 	started := s.started
 	client := s.client
 	logger := s.logger
@@ -164,15 +171,24 @@ func (s *aliyunSession) Close() error {
 		}
 	}
 	client.Shutdown()
-	if err := s.takeError(); err != nil && firstErr == nil {
-		firstErr = err
+	s.mu.Lock()
+	s.closed = true
+	s.closing = false
+	s.mu.Unlock()
+	s.closeChannels()
+	select {
+	case err := <-s.errs:
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	default:
 	}
 	return firstErr
 }
 
 func (s *aliyunSession) ensureStarted() error {
 	s.mu.Lock()
-	if s.closed {
+	if s.closed || s.closing {
 		s.mu.Unlock()
 		return errors.New("aliyun asr session is closed")
 	}
@@ -202,36 +218,30 @@ func (s *aliyunSession) ensureStarted() error {
 
 func (s *aliyunSession) appendResult(result Result) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.results = append(s.results, result)
+	closed := s.closed
+	results := s.results
+	s.mu.Unlock()
+	if closed || results == nil {
+		return
+	}
+	select {
+	case results <- result:
+	default:
+	}
 }
 
 func (s *aliyunSession) fail(err error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.lastErr == nil {
-		s.lastErr = err
+	closed := s.closed
+	errs := s.errs
+	s.mu.Unlock()
+	if closed || errs == nil {
+		return
 	}
-}
-
-func (s *aliyunSession) drainResults() []Result {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.results) == 0 {
-		return nil
+	select {
+	case errs <- err:
+	default:
 	}
-	out := make([]Result, len(s.results))
-	copy(out, s.results)
-	s.results = nil
-	return out
-}
-
-func (s *aliyunSession) takeError() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	err := s.lastErr
-	s.lastErr = nil
-	return err
 }
 
 func aliyunOnTaskFailed(text string, param interface{}) {
@@ -270,8 +280,24 @@ func aliyunOnCompleted(string, interface{}) {}
 
 func aliyunOnClose(interface{}) {}
 
+func (s *aliyunSession) closeChannels() {
+	s.mu.Lock()
+	results := s.results
+	errs := s.errs
+	s.results = nil
+	s.errs = nil
+	s.mu.Unlock()
+	if results != nil {
+		close(results)
+	}
+	if errs != nil {
+		close(errs)
+	}
+}
+
 func newAliyunRecognitionConfig(cfg *wsproto.ASRConfig) (*nls.ConnectionConfig, nls.SpeechTranscriptionStartParam, map[string]interface{}, error) {
 	param := nls.DefaultSpeechTranscriptionParam()
+	param.Format = "pcm"
 	extra := make(map[string]interface{})
 	if cfg == nil {
 		return nil, param, nil, nil

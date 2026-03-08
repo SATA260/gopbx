@@ -86,7 +86,7 @@ func requireEvent(t *testing.T, conn *websocket.Conn, want string) map[string]an
 		t.Fatalf("decode ws event: %v", err)
 	}
 	got, _ := event["event"].(string)
-	if got != want {
+	if want != "" && got != want {
 		t.Fatalf("unexpected event, want=%s got=%s payload=%v", want, got, event)
 	}
 	return event

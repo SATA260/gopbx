@@ -22,6 +22,7 @@ import (
 	"gopbx/internal/app/session"
 	"gopbx/internal/compat"
 	"gopbx/internal/config"
+	"gopbx/internal/domain/protocol"
 	"gopbx/internal/observability"
 	"gopbx/pkg/wsproto"
 
@@ -150,7 +151,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		_ = conn.Close()
 	})
 	if callType == session.TypeWebSocket {
-		audioTrack = buildWebSocketAudioTrack(activeSession)
+		audioTrack = buildWebSocketAudioTrack(activeSession, h, eventWriter)
 	}
 
 	answerSDP, builtWebRTCTrack, err := buildAnswerSDP(c, h, eventWriter, callType, activeSession, callOption)
@@ -316,12 +317,12 @@ func derefString(v *string) string {
 	return *v
 }
 
-func buildWebSocketAudioTrack(s *session.Session) *mediatrack.WebSocketTrack {
-	return mediatrack.NewWebSocketTrack(s.ID, buildAudioStream(s))
+func buildWebSocketAudioTrack(s *session.Session, h *Handlers, eventWriter *lockedEventWriter) *mediatrack.WebSocketTrack {
+	return mediatrack.NewWebSocketTrack(s.ID, buildAudioStream(s, h, eventWriter))
 }
 
 func buildWebRTCAudioTrack(s *session.Session, offer, codecName string, iceServers []wsproto.ICEServer, h *Handlers, eventWriter *lockedEventWriter) *mediatrack.WebRTCTrack {
-	mediaStream := buildAudioStream(s)
+	mediaStream := buildAudioStream(s, h, eventWriter)
 	return mediatrack.NewWebRTCTrack(
 		s.ID,
 		offer,
@@ -345,7 +346,7 @@ func buildWebRTCAudioTrack(s *session.Session, offer, codecName string, iceServe
 
 // buildAudioStream 统一装配 WS 原始音频和 WebRTC 远端音轨共用的上行处理链，
 // 这样两种接入方式会落到同一套 mock ASR / 录音 / dump 行为上，便于兼容回归。
-func buildAudioStream(s *session.Session) *stream.Stream {
+func buildAudioStream(s *session.Session, h *Handlers, eventWriter *lockedEventWriter) *stream.Stream {
 	snapshot := s.Snapshot()
 	providerName := ""
 	var asrConfig *wsproto.ASRConfig
@@ -358,7 +359,23 @@ func buildAudioStream(s *session.Session) *stream.Stream {
 	chain := processor.NewChain(
 		processor.NewDenoise(),
 		processor.NewVAD(),
-		processor.NewASR(s.ID, asroutbound.ResolveProvider(providerName), asrConfig),
+		processor.NewASR(
+			s.ID,
+			asroutbound.ResolveProvider(providerName),
+			asrConfig,
+			func(events []protocol.Event) error {
+				for _, evt := range events {
+					if err := eventWriter.WriteEvent(evt); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			func(err error) {
+				h.Metrics.Inc("error.ws.asr_async")
+				s.Fail(err.Error())
+			},
+		),
 		processor.NewRecorder(),
 	)
 	return stream.New(s.ID, chain)

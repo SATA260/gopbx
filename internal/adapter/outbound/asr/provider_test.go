@@ -31,14 +31,14 @@ func TestProviderSessionLifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create session for %s: %v", provider.Name(), err)
 		}
-		results, err := session.WriteAudio([]byte{0x01, 0x02})
-		if err != nil {
+		if err := session.WriteAudio([]byte{0x01, 0x02}); err != nil {
 			t.Fatalf("write audio for %s: %v", provider.Name(), err)
 		}
-		if len(results) != 1 || !results[0].Final {
-			t.Fatalf("unexpected results for %s: %+v", provider.Name(), results)
+		result := <-session.Results()
+		if !result.Final {
+			t.Fatalf("unexpected result for %s: %+v", provider.Name(), result)
 		}
-		if results[0].Text == "" {
+		if result.Text == "" {
 			t.Fatalf("expected non-empty result text for %s", provider.Name())
 		}
 		if err := session.Close(); err != nil {

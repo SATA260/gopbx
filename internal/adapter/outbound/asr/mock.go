@@ -4,6 +4,7 @@ package asr
 
 import (
 	"fmt"
+	"sync"
 
 	"gopbx/pkg/wsproto"
 )
@@ -13,7 +14,7 @@ type MockProvider struct{}
 func (MockProvider) Name() string { return ProviderMock }
 
 func (MockProvider) NewSession(_ *wsproto.ASRConfig) (Session, error) {
-	return &mockSession{provider: ProviderMock}, nil
+	return &mockSession{provider: ProviderMock, results: make(chan Result, 16), errs: make(chan error, 4)}, nil
 }
 
 // mockSession 用来在接入真实云服务前模拟“会话持续存在、音频连续写入、结果逐步返回”的调用模式。
@@ -21,20 +22,37 @@ type mockSession struct {
 	provider string
 	index    uint32
 	closed   bool
+	results  chan Result
+	errs     chan error
+	mu       sync.Mutex
 }
 
-func (s *mockSession) WriteAudio(payload []byte) ([]Result, error) {
+func (s *mockSession) WriteAudio(payload []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed || len(payload) == 0 {
-		return nil, nil
+		return nil
 	}
 	s.index++
-	return []Result{{
+	s.results <- Result{
 		Final: true,
 		Text:  fmt.Sprintf("%s asr final %d", s.provider, s.index),
-	}}, nil
+	}
+	return nil
 }
 
+func (s *mockSession) Results() <-chan Result { return s.results }
+
+func (s *mockSession) Errors() <-chan error { return s.errs }
+
 func (s *mockSession) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
 	s.closed = true
+	close(s.results)
+	close(s.errs)
 	return nil
 }
