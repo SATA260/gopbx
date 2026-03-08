@@ -90,6 +90,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 
 	var activeSession *session.Session
 	var audioTrack *mediatrack.WebSocketTrack
+	var webrtcTrack *mediatrack.WebRTCTrack
 	closeInfo := session.CloseInfo{Cause: session.CloseCauseDisconnect}
 	defer func() {
 		if activeSession != nil {
@@ -100,6 +101,9 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		}
 		if audioTrack != nil && audioTrack.Stream != nil {
 			audioTrack.Stream.Close()
+		}
+		if webrtcTrack != nil {
+			_ = webrtcTrack.Close()
 		}
 	}()
 
@@ -147,7 +151,15 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		audioTrack = buildWebSocketAudioTrack(activeSession)
 	}
 
-	answerSDP := buildAnswerSDP(callType, activeSession, callOption)
+	answerSDP, builtWebRTCTrack, err := buildAnswerSDP(c, h, callType, activeSession, callOption)
+	if err != nil {
+		h.Metrics.Inc("error.ws.answer_build")
+		_ = writeError(conn, dumpWriter, activeSession.ID, "handle_call", err.Error())
+		closeInfo = session.CloseInfo{Cause: session.CloseCauseError, Err: err.Error()}
+		activeSession.Fail(err.Error())
+		return nil
+	}
+	webrtcTrack = builtWebRTCTrack
 	answer := wsproto.EventEnvelope{
 		Event:     compat.EventAnswer,
 		TrackID:   activeSession.ID,
@@ -198,6 +210,17 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		}
 		_ = dumpWriter.WriteCommand(payload)
 
+		if callType == session.TypeWebRTC && webrtcTrack != nil && command.Command == wsproto.CommandCandidate {
+			if err := webrtcTrack.AddCandidates(command.Candidates); err != nil {
+				h.Metrics.Inc("error.ws.webrtc_candidate")
+				_ = writeError(conn, dumpWriter, activeSession.ID, "handle_call", err.Error())
+				closeInfo = session.CloseInfo{Cause: session.CloseCauseError, Err: err.Error()}
+				activeSession.Fail(err.Error())
+				return nil
+			}
+			continue
+		}
+
 		result := h.Router.Route(activeSession, command)
 		for _, evt := range result.Events {
 			if err := writeEvent(conn, dumpWriter, evt); err != nil {
@@ -217,9 +240,9 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 	}
 }
 
-func buildAnswerSDP(callType session.Type, activeSession *session.Session, option *wsproto.CallOption) string {
+func buildAnswerSDP(c echo.Context, h *Handlers, callType session.Type, activeSession *session.Session, option *wsproto.CallOption) (string, *mediatrack.WebRTCTrack, error) {
 	if callType != session.TypeWebRTC {
-		return ""
+		return "", nil, nil
 	}
 	codecName := ""
 	if option != nil && option.Codec != nil {
@@ -229,7 +252,12 @@ func buildAnswerSDP(callType session.Type, activeSession *session.Session, optio
 	if option != nil && option.Offer != nil {
 		offer = *option.Offer
 	}
-	return mediatrack.NewWebRTCTrack(activeSession.ID, offer, codecName).BuildAnswer()
+	webrtcTrack := mediatrack.NewWebRTCTrack(activeSession.ID, offer, codecName, resolveWebRTCIceServers(c, h))
+	answer, err := webrtcTrack.BuildAnswer()
+	if err != nil {
+		return "", nil, err
+	}
+	return answer, webrtcTrack, nil
 }
 
 func validateProviders(option *wsproto.CallOption) error {
@@ -296,6 +324,20 @@ func buildWebSocketAudioTrack(s *session.Session) *mediatrack.WebSocketTrack {
 		processor.NewRecorder(),
 	)
 	return mediatrack.NewWebSocketTrack(s.ID, stream.New(s.ID, chain))
+}
+
+func resolveWebRTCIceServers(c echo.Context, h *Handlers) []wsproto.ICEServer {
+	if len(h.Config.ICEServers) > 0 {
+		return h.Config.ICEServers
+	}
+	if h.iceProvider == nil {
+		return nil
+	}
+	servers, err := h.iceProvider.Get(c.Request().Context())
+	if err != nil {
+		return nil
+	}
+	return servers
 }
 
 func openDumpWriter(root, sessionID string, enabled bool) *callrecord.DumpWriter {
