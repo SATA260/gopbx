@@ -10,6 +10,7 @@ import (
 
 	"gopbx/internal/compat"
 
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -17,14 +18,11 @@ func TestWebRTCCallNegotiatesRealAnswerAndAcceptsCandidates(t *testing.T) {
 	_, server := newIntegrationServer(t)
 	conn := dialCallWS(t, server.URL, compat.RouteCallWebRTC, "webrtc-session")
 
-	peer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	peer, _, err := newWebRTCPeer(false)
 	if err != nil {
 		t.Fatalf("create client peer connection: %v", err)
 	}
 	defer peer.Close()
-	if _, err := peer.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio); err != nil {
-		t.Fatalf("add audio transceiver: %v", err)
-	}
 
 	candidateCh := make(chan string, 8)
 	peer.OnICECandidate(func(candidate *webrtc.ICECandidate) {
@@ -92,6 +90,110 @@ func TestWebRTCCallNegotiatesRealAnswerAndAcceptsCandidates(t *testing.T) {
 	}
 	requireEventName(t, readEvent(t, conn), compat.EventHangup)
 	expectClose(t, conn)
+}
+
+func TestWebRTCAudioProducesASRFinal(t *testing.T) {
+	_, server := newIntegrationServer(t)
+	conn := dialCallWS(t, server.URL, compat.RouteCallWebRTC, "webrtc-audio-session")
+
+	peer, localTrack, err := newWebRTCPeer(true)
+	if err != nil {
+		t.Fatalf("create audio peer connection: %v", err)
+	}
+	defer peer.Close()
+
+	candidateCh := make(chan string, 8)
+	peer.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+		if candidate == nil {
+			return
+		}
+		data, err := json.Marshal(candidate.ToJSON())
+		if err == nil {
+			candidateCh <- string(data)
+		}
+	})
+
+	offer, err := peer.CreateOffer(nil)
+	if err != nil {
+		t.Fatalf("create audio offer: %v", err)
+	}
+	if err := peer.SetLocalDescription(offer); err != nil {
+		t.Fatalf("set local description: %v", err)
+	}
+	if err := conn.WriteJSON(map[string]any{
+		"command": "invite",
+		"option": map[string]any{
+			"offer": offer.SDP,
+		},
+	}); err != nil {
+		t.Fatalf("send webrtc invite: %v", err)
+	}
+	answer := readEvent(t, conn)
+	requireEventName(t, answer, compat.EventAnswer)
+	sdp, _ := answer["sdp"].(string)
+	if err := peer.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdp}); err != nil {
+		t.Fatalf("set remote answer: %v", err)
+	}
+	select {
+	case candidateJSON := <-candidateCh:
+		if err := conn.WriteJSON(map[string]any{"command": "candidate", "candidates": []string{candidateJSON}}); err != nil {
+			t.Fatalf("send candidate command: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected candidate for audio webrtc peer")
+	}
+	waitPeerConnectionConnected(t, peer)
+
+	packet := &rtp.Packet{
+		Header: rtp.Header{
+			Version:        2,
+			PayloadType:    111,
+			SequenceNumber: 1,
+			Timestamp:      1,
+			SSRC:           1,
+		},
+		Payload: []byte{0x01, 0x02, 0x03, 0x04},
+	}
+	if err := localTrack.WriteRTP(packet); err != nil {
+		t.Fatalf("write local RTP packet: %v", err)
+	}
+
+	metrics := readEvent(t, conn)
+	requireEventName(t, metrics, compat.EventMetrics)
+	requireEventField(t, metrics, "key", "ttfb.asr.mock")
+	asrFinal := readEvent(t, conn)
+	requireEventName(t, asrFinal, compat.EventASRFinal)
+	requireEventField(t, asrFinal, "trackId", "webrtc-audio-session")
+
+	if err := conn.WriteJSON(map[string]any{"command": "hangup"}); err != nil {
+		t.Fatalf("send cleanup hangup: %v", err)
+	}
+	requireEventName(t, readEvent(t, conn), compat.EventHangup)
+	expectClose(t, conn)
+}
+
+func newWebRTCPeer(withAudioTrack bool) (*webrtc.PeerConnection, *webrtc.TrackLocalStaticRTP, error) {
+	peer, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		return nil, nil, err
+	}
+	if withAudioTrack {
+		track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, "audio", "pion")
+		if err != nil {
+			peer.Close()
+			return nil, nil, err
+		}
+		if _, err := peer.AddTrack(track); err != nil {
+			peer.Close()
+			return nil, nil, err
+		}
+		return peer, track, nil
+	}
+	if _, err := peer.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio); err != nil {
+		peer.Close()
+		return nil, nil, err
+	}
+	return peer, nil, nil
 }
 
 func waitPeerConnectionConnected(t *testing.T, peer *webrtc.PeerConnection) {

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 
 	wsinbound "gopbx/internal/adapter/inbound/ws"
 	asroutbound "gopbx/internal/adapter/outbound/asr"
@@ -85,6 +86,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 	dumpEnabled := parseDumpFlag(c.QueryParam("dump"))
 	dumpWriter := openDumpWriter(h.Config.RecorderPath, sessionID, dumpEnabled)
 	defer closeDumpWriter(dumpWriter)
+	eventWriter := newLockedEventWriter(conn, dumpWriter)
 	logger := observability.WithSession(h.Logger, sessionID)
 	logger.Info("ws session connected", "call_type", callType, "dump", dumpEnabled)
 
@@ -113,7 +115,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 	}
 	if messageType != 1 {
 		h.Metrics.Inc("error.ws.invalid_message_type")
-		_ = writeError(conn, dumpWriter, sessionID, "handle_call", "Invalid message type")
+		_ = eventWriter.WriteError(sessionID, "handle_call", "Invalid message type")
 		return nil
 	}
 
@@ -121,23 +123,23 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 	cmd, err := wsinbound.DecodeCommand(firstMessage)
 	if err != nil {
 		h.Metrics.Inc("error.ws.decode")
-		_ = writeError(conn, dumpWriter, sessionID, "handle_call", err.Error())
+		_ = eventWriter.WriteError(sessionID, "handle_call", err.Error())
 		return nil
 	}
 	_ = dumpWriter.WriteCommand(firstMessage)
 	if err := wsinbound.ValidateFirstCommand(cmd); err != nil {
 		h.Metrics.Inc("error.ws.first_command")
-		_ = writeError(conn, dumpWriter, sessionID, "handle_call", err.Error())
+		_ = eventWriter.WriteError(sessionID, "handle_call", err.Error())
 		return nil
 	}
 	callOption, err := cmd.CallOption()
 	if err != nil {
-		_ = writeError(conn, dumpWriter, sessionID, "handle_call", err.Error())
+		_ = eventWriter.WriteError(sessionID, "handle_call", err.Error())
 		return nil
 	}
 	if err := validateProviders(callOption); err != nil {
 		h.Metrics.Inc("error.ws.provider")
-		_ = writeError(conn, dumpWriter, sessionID, "handle_call", err.Error())
+		_ = eventWriter.WriteError(sessionID, "handle_call", err.Error())
 		return nil
 	}
 
@@ -151,10 +153,10 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		audioTrack = buildWebSocketAudioTrack(activeSession)
 	}
 
-	answerSDP, builtWebRTCTrack, err := buildAnswerSDP(c, h, callType, activeSession, callOption)
+	answerSDP, builtWebRTCTrack, err := buildAnswerSDP(c, h, eventWriter, callType, activeSession, callOption)
 	if err != nil {
 		h.Metrics.Inc("error.ws.answer_build")
-		_ = writeError(conn, dumpWriter, activeSession.ID, "handle_call", err.Error())
+		_ = eventWriter.WriteError(activeSession.ID, "handle_call", err.Error())
 		closeInfo = session.CloseInfo{Cause: session.CloseCauseError, Err: err.Error()}
 		activeSession.Fail(err.Error())
 		return nil
@@ -166,7 +168,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		Timestamp: wsproto.NowMillis(),
 		SDP:       answerSDP,
 	}
-	if err := writeEvent(conn, dumpWriter, answer); err != nil {
+	if err := eventWriter.WriteEvent(answer); err != nil {
 		h.Metrics.Inc("error.ws.answer_write")
 		closeInfo = session.CloseInfo{Cause: session.CloseCauseError, Err: err.Error()}
 		activeSession.Fail(err.Error())
@@ -185,7 +187,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		if messageType == websocket.BinaryMessage {
 			if callType == session.TypeWebSocket && audioTrack != nil {
 				for _, evt := range audioTrack.HandleBinary(payload) {
-					if err := writeEvent(conn, dumpWriter, evt); err != nil {
+					if err := eventWriter.WriteEvent(evt); err != nil {
 						h.Metrics.Inc("error.ws.binary_write")
 						closeInfo = session.CloseInfo{Cause: session.CloseCauseError, Err: err.Error()}
 						activeSession.Fail(err.Error())
@@ -203,7 +205,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		command, err := wsinbound.DecodeCommand(payload)
 		if err != nil {
 			h.Metrics.Inc("error.ws.decode")
-			_ = writeError(conn, dumpWriter, activeSession.ID, "handle_call", err.Error())
+			_ = eventWriter.WriteError(activeSession.ID, "handle_call", err.Error())
 			closeInfo = session.CloseInfo{Cause: session.CloseCauseError, Err: err.Error()}
 			activeSession.Fail(err.Error())
 			return nil
@@ -213,7 +215,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		if callType == session.TypeWebRTC && webrtcTrack != nil && command.Command == wsproto.CommandCandidate {
 			if err := webrtcTrack.AddCandidates(command.Candidates); err != nil {
 				h.Metrics.Inc("error.ws.webrtc_candidate")
-				_ = writeError(conn, dumpWriter, activeSession.ID, "handle_call", err.Error())
+				_ = eventWriter.WriteError(activeSession.ID, "handle_call", err.Error())
 				closeInfo = session.CloseInfo{Cause: session.CloseCauseError, Err: err.Error()}
 				activeSession.Fail(err.Error())
 				return nil
@@ -223,7 +225,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 
 		result := h.Router.Route(activeSession, command)
 		for _, evt := range result.Events {
-			if err := writeEvent(conn, dumpWriter, evt); err != nil {
+			if err := eventWriter.WriteEvent(evt); err != nil {
 				h.Metrics.Inc("error.ws.event_write")
 				closeInfo = session.CloseInfo{Cause: session.CloseCauseError, Err: err.Error()}
 				activeSession.Fail(err.Error())
@@ -240,7 +242,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 	}
 }
 
-func buildAnswerSDP(c echo.Context, h *Handlers, callType session.Type, activeSession *session.Session, option *wsproto.CallOption) (string, *mediatrack.WebRTCTrack, error) {
+func buildAnswerSDP(c echo.Context, h *Handlers, eventWriter *lockedEventWriter, callType session.Type, activeSession *session.Session, option *wsproto.CallOption) (string, *mediatrack.WebRTCTrack, error) {
 	if callType != session.TypeWebRTC {
 		return "", nil, nil
 	}
@@ -252,7 +254,7 @@ func buildAnswerSDP(c echo.Context, h *Handlers, callType session.Type, activeSe
 	if option != nil && option.Offer != nil {
 		offer = *option.Offer
 	}
-	webrtcTrack := mediatrack.NewWebRTCTrack(activeSession.ID, offer, codecName, resolveWebRTCIceServers(c, h))
+	webrtcTrack := buildWebRTCAudioTrack(activeSession, offer, codecName, resolveWebRTCIceServers(c, h), h, eventWriter)
 	answer, err := webrtcTrack.BuildAnswer()
 	if err != nil {
 		return "", nil, err
@@ -312,6 +314,35 @@ func derefString(v *string) string {
 }
 
 func buildWebSocketAudioTrack(s *session.Session) *mediatrack.WebSocketTrack {
+	return mediatrack.NewWebSocketTrack(s.ID, buildAudioStream(s))
+}
+
+func buildWebRTCAudioTrack(s *session.Session, offer, codecName string, iceServers []wsproto.ICEServer, h *Handlers, eventWriter *lockedEventWriter) *mediatrack.WebRTCTrack {
+	mediaStream := buildAudioStream(s)
+	return mediatrack.NewWebRTCTrack(
+		s.ID,
+		offer,
+		codecName,
+		iceServers,
+		mediaStream,
+		func(events []wsproto.EventEnvelope) error {
+			for _, evt := range events {
+				if err := eventWriter.WriteEvent(evt); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		func(err error) {
+			h.Metrics.Inc("error.ws.webrtc_audio")
+			s.Fail(err.Error())
+		},
+	)
+}
+
+// buildAudioStream 统一装配 WS 原始音频和 WebRTC 远端音轨共用的上行处理链，
+// 这样两种接入方式会落到同一套 mock ASR / 录音 / dump 行为上，便于兼容回归。
+func buildAudioStream(s *session.Session) *stream.Stream {
 	snapshot := s.Snapshot()
 	providerName := ""
 	if snapshot.Option != nil && snapshot.Option.ASR != nil && snapshot.Option.ASR.Provider != nil {
@@ -323,7 +354,7 @@ func buildWebSocketAudioTrack(s *session.Session) *mediatrack.WebSocketTrack {
 		processor.NewASR(s.ID, asroutbound.ResolveProvider(providerName)),
 		processor.NewRecorder(),
 	)
-	return mediatrack.NewWebSocketTrack(s.ID, stream.New(s.ID, chain))
+	return stream.New(s.ID, chain)
 }
 
 func resolveWebRTCIceServers(c echo.Context, h *Handlers) []wsproto.ICEServer {
@@ -357,22 +388,34 @@ func closeDumpWriter(writer *callrecord.DumpWriter) {
 	}
 }
 
-func writeError(conn *websocket.Conn, writer *callrecord.DumpWriter, trackID, sender, message string) error {
-	return writeEvent(conn, writer, wsproto.NewErrorEvent(trackID, sender, message))
+type lockedEventWriter struct {
+	mu     sync.Mutex
+	conn   *websocket.Conn
+	writer *callrecord.DumpWriter
 }
 
-// writeEvent 保证“发给客户端的 JSON”和“写入 dump 的 JSON”完全一致，
-// 避免后面排障时出现线上返回值与落盘内容不一致的问题。
-func writeEvent(conn *websocket.Conn, writer *callrecord.DumpWriter, evt wsproto.EventEnvelope) error {
+func newLockedEventWriter(conn *websocket.Conn, writer *callrecord.DumpWriter) *lockedEventWriter {
+	return &lockedEventWriter{conn: conn, writer: writer}
+}
+
+func (w *lockedEventWriter) WriteError(trackID, sender, message string) error {
+	return w.WriteEvent(wsproto.NewErrorEvent(trackID, sender, message))
+}
+
+// WriteEvent 统一串行化所有 WS 写操作。
+// WebRTC 远端音轨和主命令循环都会往同一个连接回事件，如果不加锁，gorilla/websocket 会出现并发写问题。
+func (w *lockedEventWriter) WriteEvent(evt wsproto.EventEnvelope) error {
 	data, err := wsinbound.MarshalEvent(evt)
 	if err != nil {
 		return err
 	}
-	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.conn.WriteMessage(websocket.TextMessage, data); err != nil {
 		return err
 	}
-	if writer != nil {
-		_ = writer.WriteEvent(data)
+	if w.writer != nil {
+		_ = w.writer.WriteEvent(data)
 	}
 	return nil
 }

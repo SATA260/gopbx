@@ -1,24 +1,31 @@
-// 这个文件实现 WebRTC 音轨，负责完成真实 offer/answer 协商并接收后续 candidate。
+// 这个文件实现 WebRTC 音轨，负责完成真实 offer/answer 协商、接收后续 candidate，并把远端音频接入处理链。
 
 package track
 
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"gopbx/internal/app/media/codec"
+	mediastream "gopbx/internal/app/media/stream"
 	"gopbx/pkg/wsproto"
 
 	"github.com/pion/webrtc/v4"
 )
 
 type WebRTCTrack struct {
+	mu         sync.Mutex
 	ID         string
 	Offer      string
 	Codec      codec.Type
 	ICEServers []wsproto.ICEServer
+	Stream     *mediastream.Stream
+	onEvents   func([]wsproto.EventEnvelope) error
+	onError    func(error)
 
 	peer       *webrtc.PeerConnection
 	answer     string
@@ -27,8 +34,16 @@ type WebRTCTrack struct {
 
 // NewWebRTCTrack 只做配置装配，不在构造函数里立刻建连。
 // 这样可以把“创建对象”和“真正执行 SDP 协商”拆开，便于上层在失败时统一走会话错误收敛。
-func NewWebRTCTrack(id, offer, codecName string, iceServers []wsproto.ICEServer) *WebRTCTrack {
-	return &WebRTCTrack{ID: id, Offer: offer, Codec: codec.Parse(codecName), ICEServers: iceServers}
+func NewWebRTCTrack(id, offer, codecName string, iceServers []wsproto.ICEServer, mediaStream *mediastream.Stream, onEvents func([]wsproto.EventEnvelope) error, onError func(error)) *WebRTCTrack {
+	return &WebRTCTrack{
+		ID:         id,
+		Offer:      offer,
+		Codec:      codec.Parse(codecName),
+		ICEServers: iceServers,
+		Stream:     mediaStream,
+		onEvents:   onEvents,
+		onError:    onError,
+	}
 }
 
 // BuildAnswer 会基于远端 offer 创建真实的 PeerConnection，并返回包含本端 candidate 的 answer SDP。
@@ -61,6 +76,9 @@ func (t *WebRTCTrack) BuildAnswer() (string, error) {
 		_ = peer.Close()
 		return "", err
 	}
+	peer.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		go t.consumeRemoteTrack(remote)
+	})
 
 	offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: t.Offer}
 	if err := peer.SetRemoteDescription(offer); err != nil {
@@ -88,8 +106,10 @@ func (t *WebRTCTrack) BuildAnswer() (string, error) {
 		_ = peer.Close()
 		return "", errors.New("webrtc local description is empty")
 	}
+	t.mu.Lock()
 	t.peer = peer
 	t.answer = local.SDP
+	t.mu.Unlock()
 	return t.answer, nil
 }
 
@@ -97,7 +117,13 @@ func (t *WebRTCTrack) BuildAnswer() (string, error) {
 // 1. 纯 candidate 行字符串；2. JSON 序列化后的 ICECandidateInit。
 // 这样既能兼容传统信令透传，也能兼容更完整的 WebRTC trickle candidate 用法。
 func (t *WebRTCTrack) AddCandidates(candidates []string) error {
-	if t == nil || t.peer == nil {
+	if t == nil {
+		return errors.New("webrtc track is nil")
+	}
+	t.mu.Lock()
+	peer := t.peer
+	t.mu.Unlock()
+	if peer == nil {
 		return errors.New("webrtc peer connection is not ready")
 	}
 	for _, raw := range candidates {
@@ -105,27 +131,69 @@ func (t *WebRTCTrack) AddCandidates(candidates []string) error {
 		if err != nil {
 			return err
 		}
-		if err := t.peer.AddICECandidate(candidate); err != nil {
+		if err := peer.AddICECandidate(candidate); err != nil {
 			return err
 		}
+		t.mu.Lock()
 		t.candidates = append(t.candidates, raw)
+		t.mu.Unlock()
 	}
 	return nil
 }
 
 func (t *WebRTCTrack) Candidates() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	out := make([]string, len(t.candidates))
 	copy(out, t.candidates)
 	return out
 }
 
 func (t *WebRTCTrack) Close() error {
-	if t == nil || t.peer == nil {
+	if t == nil {
 		return nil
 	}
-	err := t.peer.Close()
+	t.mu.Lock()
+	peer := t.peer
 	t.peer = nil
-	return err
+	t.mu.Unlock()
+	if peer == nil {
+		return nil
+	}
+	return peer.Close()
+}
+
+// consumeRemoteTrack 会持续读取远端 RTP 包，并把 payload 作为上行音频送入处理链。
+// 当前处理链里的 ASR 还是 mock backend，但这条链路已经是真实 WebRTC 媒体输入，而不是伪造事件。
+func (t *WebRTCTrack) consumeRemoteTrack(remote *webrtc.TrackRemote) {
+	if t == nil || remote == nil || t.Stream == nil || t.onEvents == nil {
+		return
+	}
+	for {
+		packet, _, err := remote.ReadRTP()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			if t.onError != nil {
+				t.onError(err)
+			}
+			return
+		}
+		if len(packet.Payload) == 0 {
+			continue
+		}
+		events := t.Stream.Push(mediastream.Packet{TrackID: t.ID, Data: packet.Payload})
+		if len(events) == 0 {
+			continue
+		}
+		if err := t.onEvents(events); err != nil {
+			if t.onError != nil {
+				t.onError(err)
+			}
+			return
+		}
+	}
 }
 
 func convertICEServers(servers []wsproto.ICEServer) []webrtc.ICEServer {
