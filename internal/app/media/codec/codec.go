@@ -12,7 +12,6 @@ type Type string
 const (
 	PCMU Type = "PCMU"
 	PCMA Type = "PCMA"
-	G722 Type = "G722"
 )
 
 type Codec interface {
@@ -26,8 +25,6 @@ func Parse(name string) Type {
 	switch strings.ToUpper(strings.TrimSpace(name)) {
 	case "PCMA":
 		return PCMA
-	case "G722":
-		return G722
 	default:
 		return PCMU
 	}
@@ -37,10 +34,19 @@ func New(name string) Codec {
 	switch Parse(name) {
 	case PCMA:
 		return PCMACodec{}
-	case G722:
-		return G722Codec{}
 	default:
 		return PCMUCodec{}
+	}
+}
+
+func FromWebRTCMime(mime string) (Type, bool) {
+	switch strings.ToLower(strings.TrimSpace(mime)) {
+	case "audio/pcmu":
+		return PCMU, true
+	case "audio/pcma":
+		return PCMA, true
+	default:
+		return "", false
 	}
 }
 
@@ -76,4 +82,29 @@ func pcmSamplesToBytes(samples []int16) []byte {
 		binary.LittleEndian.PutUint16(payload[i*2:], uint16(sample))
 	}
 	return payload
+}
+
+// ResamplePCM16LE 用最简单的最近邻方式把 PCM16 little-endian 音频重采样到目标采样率。
+// 当前主要用于把 8k G.711 入站音频统一成 16k PCM，供实时识别后端稳定消费。
+func ResamplePCM16LE(payload []byte, srcRate, dstRate int) []byte {
+	if len(payload) == 0 || srcRate <= 0 || dstRate <= 0 || srcRate == dstRate {
+		return cloneBytes(payload)
+	}
+	input := pcmBytesToSamples(payload)
+	if len(input) == 0 {
+		return nil
+	}
+	outLen := len(input) * dstRate / srcRate
+	if outLen <= 0 {
+		outLen = len(input)
+	}
+	output := make([]int16, outLen)
+	for i := 0; i < outLen; i++ {
+		srcIndex := i * srcRate / dstRate
+		if srcIndex >= len(input) {
+			srcIndex = len(input) - 1
+		}
+		output[i] = input[srcIndex]
+	}
+	return pcmSamplesToBytes(output)
 }

@@ -15,7 +15,6 @@ func TestParseAndNewCodec(t *testing.T) {
 	}{
 		{name: "pcmu", wantType: PCMU, wantRate: 8000},
 		{name: "pcma", wantType: PCMA, wantRate: 8000},
-		{name: "g722", wantType: G722, wantRate: 16000},
 	}
 
 	for _, test := range tests {
@@ -26,6 +25,18 @@ func TestParseAndNewCodec(t *testing.T) {
 		if codec.SampleRate() != test.wantRate {
 			t.Fatalf("unexpected codec sample rate for %s: %d", test.name, codec.SampleRate())
 		}
+	}
+}
+
+func TestFromWebRTCMime(t *testing.T) {
+	if kind, ok := FromWebRTCMime("audio/PCMU"); !ok || kind != PCMU {
+		t.Fatalf("unexpected pcmu mime parse result: ok=%v kind=%s", ok, kind)
+	}
+	if kind, ok := FromWebRTCMime("audio/pcma"); !ok || kind != PCMA {
+		t.Fatalf("unexpected pcma mime parse result: ok=%v kind=%s", ok, kind)
+	}
+	if _, ok := FromWebRTCMime("audio/opus"); ok {
+		t.Fatal("expected opus mime to be unsupported")
 	}
 }
 
@@ -57,14 +68,15 @@ func TestPCMACodecEncodeDecode(t *testing.T) {
 	assertPCMShape(t, pcm, decoded)
 }
 
-func TestG722CodecPassthrough(t *testing.T) {
-	codec := G722Codec{}
-	payload := []byte{1, 2, 3, 4}
-	if got := codec.Encode(payload); string(got) != string(payload) {
-		t.Fatalf("unexpected g722 encode result: %v", got)
+func TestResamplePCM16LE(t *testing.T) {
+	payload := pcmSamplesToBytes([]int16{1, 2, 3, 4})
+	resampled := ResamplePCM16LE(payload, 8000, 16000)
+	samples := pcmBytesToSamples(resampled)
+	if len(samples) != 8 {
+		t.Fatalf("unexpected resampled sample count: %d", len(samples))
 	}
-	if got := codec.Decode(payload); string(got) != string(payload) {
-		t.Fatalf("unexpected g722 decode result: %v", got)
+	if samples[0] != 1 || samples[1] != 1 || samples[6] != 4 || samples[7] != 4 {
+		t.Fatalf("unexpected resampled samples: %v", samples)
 	}
 }
 
@@ -86,7 +98,6 @@ func assertPCMShape(t *testing.T, original, decoded []byte) {
 			t.Fatalf("expected sign to be preserved at index %d: orig=%d decoded=%d", i, origSamples[i], decodedSamples[i])
 		}
 	}
-	// 再检查一下 little-endian 写回是否正常。
 	_ = binary.LittleEndian.Uint16(decoded[:2])
 }
 

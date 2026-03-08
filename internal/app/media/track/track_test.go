@@ -42,7 +42,7 @@ func TestWebRTCTrackBuildAnswerAndCandidates(t *testing.T) {
 		t.Fatalf("set local description: %v", err)
 	}
 
-	track := NewWebRTCTrack("webrtc-1", offer.SDP, "g722", nil, nil, nil, nil)
+	track := NewWebRTCTrack("webrtc-1", offer.SDP, "pcmu", nil, nil, nil, nil)
 	answer, err := track.BuildAnswer()
 	if err != nil {
 		t.Fatalf("build answer: %v", err)

@@ -5,6 +5,7 @@ package track
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -240,7 +241,17 @@ func (t *WebRTCTrack) consumeRemoteTrack(remote *webrtc.TrackRemote) {
 		if len(packet.Payload) == 0 {
 			continue
 		}
-		events := t.Stream.Push(mediastream.Packet{TrackID: t.ID, Data: packet.Payload})
+		normalized, normErr := normalizeInboundPayload(remote, packet.Payload)
+		if normErr != nil {
+			if t.onError != nil {
+				t.onError(normErr)
+			}
+			return
+		}
+		if len(normalized) == 0 {
+			continue
+		}
+		events := t.Stream.Push(mediastream.Packet{TrackID: t.ID, Data: normalized})
 		if len(events) == 0 {
 			continue
 		}
@@ -291,8 +302,6 @@ func outboundCodecCapability(kind codec.Type) webrtc.RTPCodecCapability {
 	switch kind {
 	case codec.PCMA:
 		return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMA, ClockRate: 8000, Channels: 1}
-	case codec.G722:
-		return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeG722, ClockRate: 8000, Channels: 1}
 	default:
 		return webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000, Channels: 1}
 	}
@@ -335,7 +344,25 @@ func drainSenderRTCP(sender *webrtc.RTPSender) {
 }
 
 // encodeTTSChunk 会把 provider 输出的 PCM 数据转成当前 WebRTC 出站 codec 所需的编码。
-// 目前优先补全 G.711 路径；G722 还没有真实编码器时先保持透传，避免破坏已经可用的链路。
+// 当前只保留 G.711 路径，其他 codec 会被解析层统一回退到 PCMU。
 func encodeTTSChunk(kind codec.Type, payload []byte) []byte {
 	return codec.New(string(kind)).Encode(payload)
+}
+
+// normalizeInboundPayload 会把 WebRTC 入站音频统一成 16k PCM16 little-endian。
+// 目前明确支持 PCMU/PCMA；如果对端协商成其他 codec，就尽早报错，避免把错误格式直接喂给 ASR。
+func normalizeInboundPayload(remote *webrtc.TrackRemote, payload []byte) ([]byte, error) {
+	codecType, ok := codec.FromWebRTCMime(remote.Codec().MimeType)
+	if !ok {
+		return nil, fmt.Errorf("unsupported inbound webrtc codec: %s", remote.Codec().MimeType)
+	}
+	decoded := codec.New(string(codecType)).Decode(payload)
+	if len(decoded) == 0 {
+		return nil, nil
+	}
+	srcRate := int(remote.Codec().ClockRate)
+	if srcRate <= 0 {
+		srcRate = codec.New(string(codecType)).SampleRate()
+	}
+	return codec.ResamplePCM16LE(decoded, srcRate, 16000), nil
 }

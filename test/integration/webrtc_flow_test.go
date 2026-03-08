@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	codecutil "gopbx/internal/app/media/codec"
 	"gopbx/internal/compat"
 
 	"github.com/pion/rtp"
@@ -144,15 +145,16 @@ func TestWebRTCAudioProducesASRFinal(t *testing.T) {
 	}
 	waitPeerConnectionConnected(t, peer)
 
+	encoded := codecutil.PCMUCodec{}.Encode([]byte{0x00, 0x10, 0x00, 0x20})
 	packet := &rtp.Packet{
 		Header: rtp.Header{
 			Version:        2,
-			PayloadType:    111,
+			PayloadType:    0,
 			SequenceNumber: 1,
 			Timestamp:      1,
 			SSRC:           1,
 		},
-		Payload: []byte{0x01, 0x02, 0x03, 0x04},
+		Payload: encoded,
 	}
 	if err := localTrack.WriteRTP(packet); err != nil {
 		t.Fatalf("write local RTP packet: %v", err)
@@ -267,7 +269,7 @@ func newWebRTCPeer(withAudioTrack bool) (*webrtc.PeerConnection, *webrtc.TrackLo
 		return nil, nil, err
 	}
 	if withAudioTrack {
-		track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, "audio", "pion")
+		track, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000, Channels: 1}, "audio", "pion")
 		if err != nil {
 			peer.Close()
 			return nil, nil, err
