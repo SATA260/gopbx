@@ -77,10 +77,10 @@ func TestProviderSpecificASRAndTTSMetrics(t *testing.T) {
 		"option": map[string]any{
 			"offer": "v=0",
 			"asr": map[string]any{
-				"provider": "tencent",
+				"provider": "aliyun",
 			},
 			"tts": map[string]any{
-				"provider": "tencent",
+				"provider": "aliyun",
 			},
 		},
 	}); err != nil {
@@ -93,16 +93,16 @@ func TestProviderSpecificASRAndTTSMetrics(t *testing.T) {
 	}
 	asrMetrics := readEvent(t, conn)
 	requireEventName(t, asrMetrics, compat.EventMetrics)
-	requireEventField(t, asrMetrics, "key", "ttfb.asr.tencent")
+	requireEventField(t, asrMetrics, "key", "ttfb.asr.aliyun")
 	asrFinal := readEvent(t, conn)
 	requireEventName(t, asrFinal, compat.EventASRFinal)
-	requireEventField(t, asrFinal, "text", "tencent asr final 1")
+	requireEventField(t, asrFinal, "text", "aliyun asr final 1")
 
 	if err := conn.WriteJSON(map[string]any{
 		"command": "tts",
 		"text":    "hello",
 		"option": map[string]any{
-			"provider": "tencent",
+			"provider": "aliyun",
 		},
 	}); err != nil {
 		t.Fatalf("send provider tts: %v", err)
@@ -110,10 +110,10 @@ func TestProviderSpecificASRAndTTSMetrics(t *testing.T) {
 	requireEventName(t, readEvent(t, conn), compat.EventTrackStart)
 	ttsMetrics := readEvent(t, conn)
 	requireEventName(t, ttsMetrics, compat.EventMetrics)
-	requireEventField(t, ttsMetrics, "key", "ttfb.tts.tencent")
+	requireEventField(t, ttsMetrics, "key", "ttfb.tts.aliyun")
 	completedMetrics := readEvent(t, conn)
 	requireEventName(t, completedMetrics, compat.EventMetrics)
-	requireEventField(t, completedMetrics, "key", "completed.tts.tencent")
+	requireEventField(t, completedMetrics, "key", "completed.tts.aliyun")
 	requireEventName(t, readEvent(t, conn), compat.EventTrackEnd)
 
 	if err := conn.WriteJSON(map[string]any{"command": "hangup"}); err != nil {

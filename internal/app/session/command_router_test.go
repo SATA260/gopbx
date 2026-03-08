@@ -70,3 +70,30 @@ func TestRouteNoopCommand(t *testing.T) {
 		t.Fatalf("expected no-op result, got events=%d close=%+v", len(result.Events), result.Close)
 	}
 }
+
+func TestRouteTTSConsumesProviderStream(t *testing.T) {
+	router := NewCommandRouter()
+	provider := "aliyun"
+	s := NewSession("s4", TypeWebSocket, &wsproto.CallOption{
+		TTS: &wsproto.SynthesisOption{Provider: &provider},
+	})
+	playID := "tts-1"
+	result := router.Route(s, &wsproto.CommandEnvelope{Command: wsproto.CommandTTS, Text: "hello", PlayID: &playID})
+	if len(result.Events) != 4 {
+		t.Fatalf("expected 4 tts events, got %d", len(result.Events))
+	}
+	if result.Events[1].Key != "ttfb.tts.aliyun" {
+		t.Fatalf("unexpected tts metric key: %s", result.Events[1].Key)
+	}
+	data, ok := result.Events[1].Data.(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected tts metric data: %#v", result.Events[1].Data)
+	}
+	audioBytes, _ := data["audioBytes"].(int)
+	if audioBytes == 0 {
+		t.Fatalf("expected synthesized audio bytes in metrics, data=%v", data)
+	}
+	if result.Events[3].Event != compat.EventTrackEnd {
+		t.Fatalf("unexpected final event: %s", result.Events[3].Event)
+	}
+}

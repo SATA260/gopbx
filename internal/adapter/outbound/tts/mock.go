@@ -1,11 +1,46 @@
-// 这个文件实现默认 TTS 兼容适配器，在未指定 provider 时提供稳定的指标命名和 provider 标识。
+// 这个文件实现默认 TTS 兼容适配器，在未指定 provider 时提供稳定的流式 mock 音频输出。
 
 package tts
 
+import (
+	"io"
+
+	"gopbx/pkg/wsproto"
+)
+
 type MockProvider struct{}
 
-func (MockProvider) Name() string { return "mock" }
+func (MockProvider) Name() string { return ProviderMock }
 
 func (MockProvider) MetricKey(prefix string) string {
 	return prefix + ".tts.mock"
+}
+
+func (MockProvider) StartSynthesis(text string, _ *wsproto.SynthesisOption) (Stream, error) {
+	data := []byte("mock-tts:" + text)
+	return &mockStream{chunks: []Chunk{{Data: data}}}, nil
+}
+
+type mockStream struct {
+	chunks []Chunk
+	closed bool
+}
+
+func (s *mockStream) Recv() (Chunk, error) {
+	if s.closed {
+		return Chunk{}, io.EOF
+	}
+	if len(s.chunks) == 0 {
+		s.closed = true
+		return Chunk{}, io.EOF
+	}
+	chunk := s.chunks[0]
+	s.chunks = s.chunks[1:]
+	return chunk, nil
+}
+
+func (s *mockStream) Close() error {
+	s.closed = true
+	s.chunks = nil
+	return nil
 }

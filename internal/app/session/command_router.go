@@ -3,6 +3,9 @@
 package session
 
 import (
+	"errors"
+	"io"
+
 	ttsadapter "gopbx/internal/adapter/outbound/tts"
 	mediatrack "gopbx/internal/app/media/track"
 	"gopbx/internal/compat"
@@ -32,6 +35,25 @@ func (r *CommandRouter) Route(s *Session, cmd *wsproto.CommandEnvelope) CommandR
 		trackID := s.StartTrack("tts", cmd.PlayID)
 		ttsTrack := mediatrack.NewTTSTrack(trackID, cmd.Text, cmd.Speaker, cmd.PlayID)
 		provider := resolveTTSProvider(s, cmd)
+		option := resolveTTSOption(s, cmd)
+		audioBytes, chunkCount, err := synthesizeTTS(provider, cmd.Text, option)
+		if err != nil {
+			s.ClearTrack()
+			return CommandResult{Events: []wsproto.EventEnvelope{
+				{
+					Event:     compat.EventTrackStart,
+					TrackID:   ttsTrack.TrackID(),
+					Timestamp: timestamp,
+				},
+				wsproto.NewErrorEvent(ttsTrack.TrackID(), "tts", err.Error()),
+				{
+					Event:     compat.EventTrackEnd,
+					TrackID:   ttsTrack.TrackID(),
+					Timestamp: timestamp,
+					Duration:  wsproto.Uint64(0),
+				},
+			}}
+		}
 		events := []wsproto.EventEnvelope{
 			{
 				Event:     compat.EventTrackStart,
@@ -43,7 +65,11 @@ func (r *CommandRouter) Route(s *Session, cmd *wsproto.CommandEnvelope) CommandR
 				Timestamp: timestamp,
 				Key:       provider.MetricKey("ttfb"),
 				Duration:  wsproto.Uint64(0),
-				Data:      withProvider(ttsTrack.MetricsData(derefBool(cmd.Streaming), derefBool(cmd.EndOfStream)), provider.Name()),
+				Data: withProvider(withAudioStats(
+					ttsTrack.MetricsData(derefBool(cmd.Streaming), derefBool(cmd.EndOfStream)),
+					audioBytes,
+					chunkCount,
+				), provider.Name()),
 			},
 			{
 				Event:     compat.EventMetrics,
@@ -51,9 +77,11 @@ func (r *CommandRouter) Route(s *Session, cmd *wsproto.CommandEnvelope) CommandR
 				Key:       provider.MetricKey("completed"),
 				Duration:  wsproto.Uint64(0),
 				Data: map[string]any{
-					"trackId":  ttsTrack.TrackID(),
-					"length":   len(cmd.Text),
-					"provider": provider.Name(),
+					"trackId":    ttsTrack.TrackID(),
+					"length":     len(cmd.Text),
+					"audioBytes": audioBytes,
+					"chunks":     chunkCount,
+					"provider":   provider.Name(),
 				},
 			},
 			{
@@ -178,11 +206,59 @@ func resolveTTSProvider(s *Session, cmd *wsproto.CommandEnvelope) ttsadapter.Pro
 	return ttsadapter.ResolveProvider("")
 }
 
+func resolveTTSOption(s *Session, cmd *wsproto.CommandEnvelope) *wsproto.SynthesisOption {
+	if option, err := cmd.TTSOption(); err == nil && option != nil {
+		return option
+	}
+	snapshot := s.Snapshot()
+	if snapshot.Option != nil {
+		return snapshot.Option.TTS
+	}
+	return nil
+}
+
+// synthesizeTTS 会把 provider 输出的音频流完整消费掉，并统计字节数与 chunk 数。
+// 当前阶段还没有把这些音频真正送到客户端，所以这里先以“安全消费 + 统计”为主，为下一步真实出音留接口。
+func synthesizeTTS(provider ttsadapter.Provider, text string, option *wsproto.SynthesisOption) (audioBytes int, chunkCount int, err error) {
+	stream, err := provider.StartSynthesis(text, option)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() {
+		closeErr := stream.Close()
+		if err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+	for {
+		chunk, recvErr := stream.Recv()
+		if recvErr != nil {
+			if errors.Is(recvErr, io.EOF) {
+				return audioBytes, chunkCount, err
+			}
+			return audioBytes, chunkCount, recvErr
+		}
+		audioBytes += len(chunk.Data)
+		if len(chunk.Data) > 0 {
+			chunkCount++
+		}
+	}
+}
+
 func withProvider(data map[string]any, provider string) map[string]any {
 	if data == nil {
 		data = make(map[string]any, 1)
 	}
 	data["provider"] = provider
+	return data
+}
+
+func withAudioStats(data map[string]any, audioBytes, chunkCount int) map[string]any {
+	if data == nil {
+		data = make(map[string]any, 2)
+	}
+	data["audioBytes"] = audioBytes
+	data["chunks"] = chunkCount
 	return data
 }
 

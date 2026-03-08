@@ -6,14 +6,14 @@
     "callee": "1002",
     "denoise": true,
     "asr": {
-      "provider": "tencent",
+      "provider": "aliyun",
       "appId": "app-1",
       "secretId": "secret-id",
       "secretKey": "secret-key",
       "language": "zh-CN"
     },
     "tts": {
-      "provider": "tencent",
+      "provider": "aliyun",
       "speaker": "speaker-1",
       "appId": "app-1",
       "secretId": "secret-id",

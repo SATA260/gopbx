@@ -38,10 +38,10 @@ func TestDecodeInviteCommandFixture(t *testing.T) {
 	if option == nil || option.Offer == nil || *option.Offer != "v=0" {
 		t.Fatalf("unexpected invite option: %+v", option)
 	}
-	if option.ASR == nil || option.ASR.Provider == nil || *option.ASR.Provider != "tencent" {
+	if option.ASR == nil || option.ASR.Provider == nil || *option.ASR.Provider != "aliyun" {
 		t.Fatalf("unexpected asr option: %+v", option.ASR)
 	}
-	if option.TTS == nil || option.TTS.Provider == nil || *option.TTS.Provider != "tencent" {
+	if option.TTS == nil || option.TTS.Provider == nil || *option.TTS.Provider != "aliyun" {
 		t.Fatalf("unexpected tts option: %+v", option.TTS)
 	}
 	if option.Codec == nil || *option.Codec != "pcmu" {
@@ -67,7 +67,7 @@ func TestDecodeTTSCommandFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode tts option: %v", err)
 	}
-	if option == nil || option.Provider == nil || *option.Provider != "tencent" {
+	if option == nil || option.Provider == nil || *option.Provider != "aliyun" {
 		t.Fatalf("unexpected tts option: %+v", option)
 	}
 }

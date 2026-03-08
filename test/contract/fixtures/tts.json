@@ -7,7 +7,7 @@
   "streaming": false,
   "endOfStream": true,
   "option": {
-    "provider": "tencent",
+    "provider": "aliyun",
     "speaker": "speaker-1",
     "speed": 1,
     "volume": 5
