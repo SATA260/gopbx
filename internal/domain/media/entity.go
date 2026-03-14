@@ -2,7 +2,26 @@
 
 package media
 
+type PacketKind string
+
+const (
+	PacketKindAudio      PacketKind = "audio"
+	PacketKindSegmentEnd PacketKind = "segmentEnd"
+)
+
 type Packet struct {
 	TrackID string
 	Data    []byte
+	Kind    PacketKind
+}
+
+func NormalizePacketKind(kind PacketKind) PacketKind {
+	if kind == PacketKindSegmentEnd {
+		return PacketKindSegmentEnd
+	}
+	return PacketKindAudio
+}
+
+func (p Packet) ResolvedKind() PacketKind {
+	return NormalizePacketKind(p.Kind)
 }

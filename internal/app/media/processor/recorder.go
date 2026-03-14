@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	mediaentity "gopbx/internal/domain/media"
-	"gopbx/internal/domain/protocol"
 )
 
 type Recorder struct {
@@ -18,11 +17,13 @@ func NewRecorder() *Recorder { return &Recorder{} }
 
 func (r *Recorder) Name() string { return "recorder" }
 
-func (r *Recorder) Process(packet mediaentity.Packet) []protocol.Event {
-	r.mu.Lock()
-	r.bytesSum += uint64(len(packet.Data))
-	r.mu.Unlock()
-	return nil
+func (r *Recorder) Process(packet mediaentity.Packet) Result {
+	if packet.ResolvedKind() == mediaentity.PacketKindAudio {
+		r.mu.Lock()
+		r.bytesSum += uint64(len(packet.Data))
+		r.mu.Unlock()
+	}
+	return passthrough(packet)
 }
 
 func (r *Recorder) Bytes() uint64 {

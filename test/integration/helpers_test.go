@@ -3,6 +3,7 @@ package integration_test
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -169,4 +170,60 @@ func requireEventField(t *testing.T, evt map[string]any, field, want string) {
 
 func idsString(ids []string) string {
 	return fmt.Sprintf("%v", ids)
+}
+
+func requireEventNameEventually(t *testing.T, conn *websocket.Conn, want string, timeout time.Duration) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		evt := readEvent(t, conn)
+		if got, _ := evt["event"].(string); got == want {
+			return evt
+		}
+	}
+	t.Fatalf("timed out waiting for event %s", want)
+	return nil
+}
+
+func newTestVADServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		payload, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		prob := 0.05
+		if hasVoiceEnergy(payload) {
+			prob = 0.95
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"speechProb": prob})
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func hasVoiceEnergy(payload []byte) bool {
+	for i := 0; i+1 < len(payload); i += 2 {
+		sample := int16(uint16(payload[i]) | uint16(payload[i+1])<<8)
+		if sample > 200 || sample < -200 {
+			return true
+		}
+	}
+	return false
+}
+
+func makePCMFrame(amplitude int16) []byte {
+	frame := make([]byte, 640)
+	for i := 0; i+1 < len(frame); i += 2 {
+		frame[i] = byte(amplitude)
+		frame[i+1] = byte(uint16(amplitude) >> 8)
+	}
+	return frame
+}
+
+func makePCM8kFrame(amplitude int16) []byte {
+	frame := make([]byte, 320)
+	for i := 0; i+1 < len(frame); i += 2 {
+		frame[i] = byte(amplitude)
+		frame[i+1] = byte(uint16(amplitude) >> 8)
+	}
+	return frame
 }

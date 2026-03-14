@@ -32,7 +32,7 @@ func TestBinaryAudioProducesASRFinal(t *testing.T) {
 	if err := conn.WriteJSON(map[string]any{"command": "hangup"}); err != nil {
 		t.Fatalf("send cleanup hangup: %v", err)
 	}
-	requireEventName(t, readEvent(t, conn), compat.EventHangup)
+	requireEventName(t, requireEventNameEventually(t, conn, compat.EventHangup, 2*time.Second), compat.EventHangup)
 	expectClose(t, conn)
 }
 
@@ -119,6 +119,87 @@ func TestProviderSpecificASRAndTTSMetrics(t *testing.T) {
 	if err := conn.WriteJSON(map[string]any{"command": "hangup"}); err != nil {
 		t.Fatalf("send cleanup hangup: %v", err)
 	}
-	requireEventName(t, readEvent(t, conn), compat.EventHangup)
+	requireEventName(t, requireEventNameEventually(t, conn, compat.EventHangup, 2*time.Second), compat.EventHangup)
+	expectClose(t, conn)
+}
+
+func TestBinaryAudioWithHybridVADProducesSpeechAndEOU(t *testing.T) {
+	vadServer := newTestVADServer(t)
+
+	_, server := newIntegrationServer(t)
+	conn := dialCallWS(t, server.URL, compat.RouteCall, "vad-session")
+
+	if err := conn.WriteJSON(map[string]any{
+		"command": "invite",
+		"option": map[string]any{
+			"offer": "v=0",
+			"vad": map[string]any{
+				"type":           "hybrid",
+				"samplerate":     16000,
+				"speechPadding":  20,
+				"silencePadding": 60,
+				"ratio":          1.5,
+				"voiceThreshold": 0.6,
+				"endpoint":       vadServer.URL,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send hybrid vad invite: %v", err)
+	}
+	requireEventName(t, readEvent(t, conn), compat.EventAnswer)
+
+	voice := makePCMFrame(1400)
+	for i := 0; i < 3; i++ {
+		if err := conn.WriteMessage(websocket.BinaryMessage, voice); err != nil {
+			t.Fatalf("send voiced frame %d: %v", i, err)
+		}
+	}
+
+	var sawSpeaking bool
+	var sawMetrics bool
+	var sawFinal bool
+	deadline := time.Now().Add(4 * time.Second)
+	for !(sawSpeaking && sawMetrics && sawFinal) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for hybrid vad start events, speaking=%v metrics=%v final=%v", sawSpeaking, sawMetrics, sawFinal)
+		}
+		event := readEvent(t, conn)
+		switch event["event"] {
+		case compat.EventSpeaking:
+			sawSpeaking = true
+		case compat.EventMetrics:
+			sawMetrics = true
+		case compat.EventASRFinal:
+			sawFinal = true
+		}
+	}
+
+	silence := makePCMFrame(0)
+	for i := 0; i < 5; i++ {
+		if err := conn.WriteMessage(websocket.BinaryMessage, silence); err != nil {
+			t.Fatalf("send silence frame %d: %v", i, err)
+		}
+	}
+
+	var sawSilence bool
+	var sawEOU bool
+	deadline = time.Now().Add(4 * time.Second)
+	for !(sawSilence && sawEOU) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for hybrid vad end events, silence=%v eou=%v", sawSilence, sawEOU)
+		}
+		event := readEvent(t, conn)
+		switch event["event"] {
+		case compat.EventSilence:
+			sawSilence = true
+		case compat.EventEOU:
+			sawEOU = true
+		}
+	}
+
+	if err := conn.WriteJSON(map[string]any{"command": "hangup"}); err != nil {
+		t.Fatalf("send cleanup hangup: %v", err)
+	}
+	requireEventName(t, requireEventNameEventually(t, conn, compat.EventHangup, 2*time.Second), compat.EventHangup)
 	expectClose(t, conn)
 }

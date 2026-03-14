@@ -15,6 +15,7 @@ import (
 	iceoutbound "gopbx/internal/adapter/outbound/ice"
 	llmoutbound "gopbx/internal/adapter/outbound/llm"
 	ttsoutbound "gopbx/internal/adapter/outbound/tts"
+	vadoutbound "gopbx/internal/adapter/outbound/vad"
 	"gopbx/internal/app/callrecord"
 	"gopbx/internal/app/media/processor"
 	"gopbx/internal/app/media/stream"
@@ -138,7 +139,7 @@ func (h *Handlers) serveWS(c echo.Context, callType session.Type) error {
 		_ = eventWriter.WriteError(sessionID, "handle_call", err.Error())
 		return nil
 	}
-	if err := validateProviders(callOption); err != nil {
+	if err := validateCallOptions(callOption); err != nil {
 		h.Metrics.Inc("error.ws.provider")
 		_ = eventWriter.WriteError(sessionID, "handle_call", err.Error())
 		return nil
@@ -266,7 +267,7 @@ func buildAnswerSDP(c echo.Context, h *Handlers, eventWriter *lockedEventWriter,
 	return answer, webrtcTrack, nil
 }
 
-func validateProviders(option *wsproto.CallOption) error {
+func validateCallOptions(option *wsproto.CallOption) error {
 	if option == nil {
 		return nil
 	}
@@ -279,6 +280,9 @@ func validateProviders(option *wsproto.CallOption) error {
 		if err := ttsoutbound.ValidateProvider(*option.TTS.Provider); err != nil {
 			return err
 		}
+	}
+	if err := vadoutbound.ValidateOption(option.VAD); err != nil {
+		return err
 	}
 	return nil
 }
@@ -350,15 +354,26 @@ func buildAudioStream(s *session.Session, h *Handlers, eventWriter *lockedEventW
 	snapshot := s.Snapshot()
 	providerName := ""
 	var asrConfig *wsproto.ASRConfig
+	var vadConfig *wsproto.VADOption
 	if snapshot.Option != nil && snapshot.Option.ASR != nil && snapshot.Option.ASR.Provider != nil {
 		asrConfig = snapshot.Option.ASR
 		providerName = *snapshot.Option.ASR.Provider
 	} else if snapshot.Option != nil {
 		asrConfig = snapshot.Option.ASR
+		vadConfig = snapshot.Option.VAD
 	}
+	if snapshot.Option != nil && vadConfig == nil {
+		vadConfig = snapshot.Option.VAD
+	}
+	scorer, err := vadoutbound.NewScorer(vadConfig)
+	if err != nil {
+		scorer = nil
+	}
+	segmented := vadoutbound.IsSegmented(vadConfig)
 	chain := processor.NewChain(
 		processor.NewDenoise(),
-		processor.NewVAD(),
+		processor.NewRecorder(),
+		processor.NewVAD(vadConfig, scorer),
 		processor.NewASR(
 			s.ID,
 			asroutbound.ResolveProvider(providerName),
@@ -375,8 +390,8 @@ func buildAudioStream(s *session.Session, h *Handlers, eventWriter *lockedEventW
 				h.Metrics.Inc("error.ws.asr_async")
 				s.Fail(err.Error())
 			},
+			segmented,
 		),
-		processor.NewRecorder(),
 	)
 	return stream.New(s.ID, chain)
 }

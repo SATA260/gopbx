@@ -96,7 +96,7 @@ func TestWebRTCCallNegotiatesRealAnswerAndAcceptsCandidates(t *testing.T) {
 	if err := conn.WriteJSON(map[string]any{"command": "hangup"}); err != nil {
 		t.Fatalf("send cleanup hangup: %v", err)
 	}
-	requireEventName(t, readEvent(t, conn), compat.EventHangup)
+	requireEventName(t, requireEventNameEventually(t, conn, compat.EventHangup, 2*time.Second), compat.EventHangup)
 	expectClose(t, conn)
 }
 
@@ -178,7 +178,146 @@ func TestWebRTCAudioProducesASRFinal(t *testing.T) {
 	if err := conn.WriteJSON(map[string]any{"command": "hangup"}); err != nil {
 		t.Fatalf("send cleanup hangup: %v", err)
 	}
-	requireEventName(t, readEvent(t, conn), compat.EventHangup)
+	requireEventName(t, requireEventNameEventually(t, conn, compat.EventHangup, 2*time.Second), compat.EventHangup)
+	expectClose(t, conn)
+}
+
+func TestWebRTCAudioWithHybridVADProducesSpeechAndEOU(t *testing.T) {
+	vadServer := newTestVADServer(t)
+	_, server := newIntegrationServer(t)
+	conn := dialCallWS(t, server.URL, compat.RouteCallWebRTC, "webrtc-vad-session")
+
+	peer, localTrack, err := newWebRTCPeer(true)
+	if err != nil {
+		t.Fatalf("create hybrid vad peer connection: %v", err)
+	}
+	defer peer.Close()
+	setClientAudioCodecPreferences(t, peer)
+
+	candidateCh := make(chan string, 8)
+	peer.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+		if candidate == nil {
+			return
+		}
+		data, err := json.Marshal(candidate.ToJSON())
+		if err == nil {
+			candidateCh <- string(data)
+		}
+	})
+
+	offer, err := peer.CreateOffer(nil)
+	if err != nil {
+		t.Fatalf("create hybrid vad offer: %v", err)
+	}
+	if err := peer.SetLocalDescription(offer); err != nil {
+		t.Fatalf("set local description: %v", err)
+	}
+	if err := conn.WriteJSON(map[string]any{
+		"command": "invite",
+		"option": map[string]any{
+			"offer": offer.SDP,
+			"vad": map[string]any{
+				"type":           "hybrid",
+				"samplerate":     16000,
+				"speechPadding":  20,
+				"silencePadding": 60,
+				"ratio":          1.5,
+				"voiceThreshold": 0.6,
+				"endpoint":       vadServer.URL,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send webrtc hybrid vad invite: %v", err)
+	}
+	answer := readEvent(t, conn)
+	requireEventName(t, answer, compat.EventAnswer)
+	sdp, _ := answer["sdp"].(string)
+	if err := peer.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdp}); err != nil {
+		t.Fatalf("set remote answer: %v", err)
+	}
+	select {
+	case candidateJSON := <-candidateCh:
+		if err := conn.WriteJSON(map[string]any{"command": "candidate", "candidates": []string{candidateJSON}}); err != nil {
+			t.Fatalf("send candidate command: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected candidate for hybrid vad webrtc peer")
+	}
+	waitPeerConnectionConnected(t, peer)
+
+	voice := codecutil.PCMUCodec{}.Encode(makePCM8kFrame(1400))
+	for i := 0; i < 3; i++ {
+		packet := &rtp.Packet{
+			Header: rtp.Header{
+				Version:        2,
+				PayloadType:    0,
+				SequenceNumber: uint16(i + 1),
+				Timestamp:      uint32(i*160 + 1),
+				SSRC:           1,
+			},
+			Payload: voice,
+		}
+		if err := localTrack.WriteRTP(packet); err != nil {
+			t.Fatalf("write voiced RTP packet %d: %v", i, err)
+		}
+	}
+
+	var sawSpeaking bool
+	var sawMetrics bool
+	var sawFinal bool
+	deadline := time.Now().Add(4 * time.Second)
+	for !(sawSpeaking && sawMetrics && sawFinal) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for webrtc hybrid vad start events, speaking=%v metrics=%v final=%v", sawSpeaking, sawMetrics, sawFinal)
+		}
+		event := readEvent(t, conn)
+		switch event["event"] {
+		case compat.EventSpeaking:
+			sawSpeaking = true
+		case compat.EventMetrics:
+			sawMetrics = true
+		case compat.EventASRFinal:
+			sawFinal = true
+		}
+	}
+
+	silence := codecutil.PCMUCodec{}.Encode(makePCM8kFrame(0))
+	for i := 0; i < 5; i++ {
+		packet := &rtp.Packet{
+			Header: rtp.Header{
+				Version:        2,
+				PayloadType:    0,
+				SequenceNumber: uint16(i + 4),
+				Timestamp:      uint32((i+3)*160 + 1),
+				SSRC:           1,
+			},
+			Payload: silence,
+		}
+		if err := localTrack.WriteRTP(packet); err != nil {
+			t.Fatalf("write silence RTP packet %d: %v", i, err)
+		}
+	}
+
+	var sawSilence bool
+	var sawEOU bool
+	deadline = time.Now().Add(4 * time.Second)
+	for !(sawSilence && sawEOU) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for webrtc hybrid vad end events, silence=%v eou=%v", sawSilence, sawEOU)
+		}
+		event := readEvent(t, conn)
+		switch event["event"] {
+		case compat.EventSilence:
+			sawSilence = true
+		case compat.EventEOU:
+			sawEOU = true
+		}
+	}
+
+	if err := conn.WriteJSON(map[string]any{"command": "hangup"}); err != nil {
+		t.Fatalf("send cleanup hangup: %v", err)
+	}
+	requireEventName(t, requireEventNameEventually(t, conn, compat.EventHangup, 2*time.Second), compat.EventHangup)
 	expectClose(t, conn)
 }
 

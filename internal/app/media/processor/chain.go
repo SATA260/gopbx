@@ -9,7 +9,7 @@ import (
 
 type Processor interface {
 	Name() string
-	Process(mediaentity.Packet) []protocol.Event
+	Process(mediaentity.Packet) Result
 }
 
 type Closer interface {
@@ -40,9 +40,19 @@ func (c *Chain) Process(packet mediaentity.Packet) []protocol.Event {
 	if c == nil {
 		return nil
 	}
+	packets := []mediaentity.Packet{packet}
 	events := make([]protocol.Event, 0, len(c.processors))
 	for _, processor := range c.processors {
-		events = append(events, processor.Process(packet)...)
+		if len(packets) == 0 {
+			break
+		}
+		nextPackets := make([]mediaentity.Packet, 0, len(packets))
+		for _, current := range packets {
+			result := processor.Process(current)
+			events = append(events, result.Events...)
+			nextPackets = append(nextPackets, result.Packets...)
+		}
+		packets = nextPackets
 	}
 	return events
 }

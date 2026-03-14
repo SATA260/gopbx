@@ -17,6 +17,7 @@ type ASR struct {
 	trackID   string
 	provider  asradapter.Provider
 	config    *wsproto.ASRConfig
+	segmented bool
 	session   asradapter.Session
 	failed    bool
 	index     uint32
@@ -27,32 +28,39 @@ type ASR struct {
 	closeOnce sync.Once
 }
 
-func NewASR(trackID string, provider asradapter.Provider, cfg *wsproto.ASRConfig, emit func([]protocol.Event) error, onError func(error)) *ASR {
+func NewASR(trackID string, provider asradapter.Provider, cfg *wsproto.ASRConfig, emit func([]protocol.Event) error, onError func(error), segmented bool) *ASR {
 	if provider == nil {
 		provider = asradapter.ResolveProvider("")
 	}
-	return &ASR{trackID: trackID, provider: provider, config: cfg, emit: emit, onError: onError}
+	return &ASR{trackID: trackID, provider: provider, config: cfg, emit: emit, onError: onError, segmented: segmented}
 }
 
 func (a *ASR) Name() string { return "asr" }
 
 // Process 的职责现在只剩“确保 session 已建立并持续送音频”。
 // 识别结果由后台 goroutine 异步消费 provider 回调，然后主动推送成协议事件。
-func (a *ASR) Process(packet mediaentity.Packet) []protocol.Event {
-	if len(packet.Data) == 0 {
-		return nil
+
+func (a *ASR) Process(packet mediaentity.Packet) Result {
+	if packet.ResolvedKind() == mediaentity.PacketKindSegmentEnd {
+		if err := a.stopActiveSession(); err != nil {
+			return Result{Events: []protocol.Event{wsproto.NewErrorEvent(a.trackID, "asr", err.Error())}}
+		}
+		return Result{}
 	}
-	if isSilentPCM16(packet.Data) {
+	if len(packet.Data) == 0 {
+		return Result{}
+	}
+	if !a.segmented && isSilentPCM16(packet.Data) {
 		a.mu.Lock()
 		a.silence++
 		shouldStop := a.session != nil && a.silence >= 8
 		a.mu.Unlock()
 		if shouldStop {
 			if err := a.stopActiveSession(); err != nil {
-				return []protocol.Event{wsproto.NewErrorEvent(a.trackID, "asr", err.Error())}
+				return Result{Events: []protocol.Event{wsproto.NewErrorEvent(a.trackID, "asr", err.Error())}}
 			}
 		}
-		return nil
+		return Result{}
 	}
 	a.mu.Lock()
 	a.silence = 0
@@ -62,15 +70,15 @@ func (a *ASR) Process(packet mediaentity.Packet) []protocol.Event {
 	session, err := a.ensureSessionLocked()
 	a.mu.Unlock()
 	if err != nil {
-		return []protocol.Event{wsproto.NewErrorEvent(a.trackID, "asr", err.Error())}
+		return Result{Events: []protocol.Event{wsproto.NewErrorEvent(a.trackID, "asr", err.Error())}}
 	}
 	if session == nil {
-		return nil
+		return Result{}
 	}
 	if err := session.WriteAudio(packet.Data); err != nil {
-		return []protocol.Event{wsproto.NewErrorEvent(a.trackID, "asr", err.Error())}
+		return Result{Events: []protocol.Event{wsproto.NewErrorEvent(a.trackID, "asr", err.Error())}}
 	}
-	return nil
+	return Result{}
 }
 
 func (a *ASR) Close() error {

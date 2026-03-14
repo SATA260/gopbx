@@ -43,14 +43,16 @@ func (s *stubSession) Close() error {
 }
 
 type stubProvider struct {
-	name    string
-	session *stubSession
+	name     string
+	session  *stubSession
+	sessions []*stubSession
 }
 
 func (p *stubProvider) Name() string { return p.name }
 
 func (p *stubProvider) NewSession(_ *wsproto.ASRConfig) (asradapter.Session, error) {
 	p.session = &stubSession{results: make(chan asradapter.Result, 4), errs: make(chan error, 1)}
+	p.sessions = append(p.sessions, p.session)
 	return p.session, nil
 }
 
@@ -71,10 +73,11 @@ func TestASRProcessorUsesSessionAndClosesIt(t *testing.T) {
 			return nil
 		},
 		nil,
+		false,
 	)
 	returned := processor.Process(mediaentity.Packet{TrackID: "track-1", Data: []byte{0x01, 0x02}})
-	if len(returned) != 0 {
-		t.Fatalf("expected async processor to return no direct events, got %d", len(returned))
+	if len(returned.Events) != 0 {
+		t.Fatalf("expected async processor to return no direct events, got %d", len(returned.Events))
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for {
@@ -102,5 +105,44 @@ func TestASRProcessorUsesSessionAndClosesIt(t *testing.T) {
 	}
 	if provider.session == nil || !provider.session.closed {
 		t.Fatal("expected underlying session to be closed")
+	}
+}
+
+func TestASRProcessorSegmentedModeStopsAndRestartsSession(t *testing.T) {
+	provider := &stubProvider{name: "stub"}
+	processor := NewASR(
+		"track-1",
+		provider,
+		nil,
+		func([]protocol.Event) error { return nil },
+		nil,
+		true,
+	)
+	if got := processor.Process(mediaentity.Packet{TrackID: "track-1", Data: []byte{0x01, 0x02}, Kind: mediaentity.PacketKindAudio}); len(got.Events) != 0 {
+		t.Fatalf("expected no sync events for first voiced packet, got %d", len(got.Events))
+	}
+	if len(provider.sessions) != 1 {
+		t.Fatalf("expected first session to be created, got %d", len(provider.sessions))
+	}
+	if got := processor.Process(mediaentity.Packet{TrackID: "track-1", Kind: mediaentity.PacketKindSegmentEnd}); len(got.Events) != 0 {
+		t.Fatalf("expected segment end to return no sync events, got %d", len(got.Events))
+	}
+	if !provider.sessions[0].closed {
+		t.Fatal("expected first session to be closed by segmentEnd")
+	}
+	if got := processor.Process(mediaentity.Packet{TrackID: "track-1", Data: []byte{0x03, 0x04}, Kind: mediaentity.PacketKindAudio}); len(got.Events) != 0 {
+		t.Fatalf("expected no sync events for second voiced packet, got %d", len(got.Events))
+	}
+	if len(provider.sessions) != 2 {
+		t.Fatalf("expected second session after segmentEnd, got %d", len(provider.sessions))
+	}
+	if provider.sessions[1].closed {
+		t.Fatal("expected active second session to remain open before processor.Close")
+	}
+	if err := processor.Close(); err != nil {
+		t.Fatalf("close processor: %v", err)
+	}
+	if !provider.sessions[1].closed {
+		t.Fatal("expected second session to be closed on processor.Close")
 	}
 }

@@ -1,16 +1,16 @@
 # gopbx
 
-`gopbx` 是一个基于 Echo 的实时语音交互系统。
+`gopbx` 是一个基于 Echo 的实时语音会话网关，用来兼容既有服务的 HTTP、WebSocket、管理接口、dump 和话单行为。
 
 当前配置管理使用 `koanf`，并且所有运行参数统一从环境变量读取。
 
-当前骨架已包含：
+当前实现已包含：
 
 - Echo 启动入口与路由装配
-- WebSocket 首包 `invite/accept` 校验骨架
-- `/call` `/call/webrtc` `/call/lists` `/call/kill/:id` `/iceservers` `/llm/v1/*` 路由
-- 会话管理器、协议兼容常量、配置加载器
-- 合同测试、部署脚本与文档占位
+- `/call` `/call/webrtc` `/call/lists` `/call/kill/:id` `/iceservers` `/llm/v1/*` 兼容路由
+- WebSocket 首包校验、会话生命周期、二进制音频链路、命令事件兼容壳
+- 媒体处理链、provider-aware ASR/TTS 兼容适配器、dump 与话单归档
+- 合同测试、集成测试、端到端测试与分层测试脚本
 
 启动示例：
 

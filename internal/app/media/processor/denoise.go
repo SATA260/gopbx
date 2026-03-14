@@ -4,7 +4,6 @@ package processor
 
 import (
 	mediaentity "gopbx/internal/domain/media"
-	"gopbx/internal/domain/protocol"
 )
 
 type Denoise struct{}
@@ -13,4 +12,4 @@ func NewDenoise() *Denoise { return &Denoise{} }
 
 func (d *Denoise) Name() string { return "denoise" }
 
-func (d *Denoise) Process(mediaentity.Packet) []protocol.Event { return nil }
+func (d *Denoise) Process(packet mediaentity.Packet) Result { return passthrough(packet) }

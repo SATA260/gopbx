@@ -30,7 +30,7 @@ func (s *Stream) Push(packet Packet) []protocol.Event {
 	if closed || chain == nil {
 		return nil
 	}
-	return chain.Process(mediaentity.Packet{TrackID: packet.TrackID, Data: packet.Data})
+	return chain.Process(mediaentity.Packet{TrackID: packet.TrackID, Data: packet.Data, Kind: mediaentity.PacketKindAudio})
 }
 
 // Close 会先把流标记为关闭，再把处理器链里的会话资源一并释放。

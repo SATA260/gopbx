@@ -56,6 +56,44 @@ func TestMarshalAsrFinalEvent(t *testing.T) {
 	assertJSONEq(t, mustReadFixture(t, "asr_final.json"), data)
 }
 
+func TestMarshalSpeakingEvent(t *testing.T) {
+	data, err := wsinbound.MarshalEvent(wsproto.EventEnvelope{
+		Event:     compat.EventSpeaking,
+		TrackID:   "session-1",
+		Timestamp: 1711111119999,
+	})
+	if err != nil {
+		t.Fatalf("marshal speaking event: %v", err)
+	}
+	assertJSONEq(t, mustReadFixture(t, "speaking.json"), data)
+}
+
+func TestMarshalSilenceEvent(t *testing.T) {
+	data, err := wsinbound.MarshalEvent(wsproto.EventEnvelope{
+		Event:     compat.EventSilence,
+		TrackID:   "session-1",
+		Timestamp: 1711111120000,
+	})
+	if err != nil {
+		t.Fatalf("marshal silence event: %v", err)
+	}
+	assertJSONEq(t, mustReadFixture(t, "silence.json"), data)
+}
+
+func TestMarshalEOUEvent(t *testing.T) {
+	data, err := wsinbound.MarshalEvent(wsproto.EventEnvelope{
+		Event:     compat.EventEOU,
+		TrackID:   "session-1",
+		Timestamp: 1711111121111,
+		StartTime: wsproto.Int64(1711111119000),
+		EndTime:   wsproto.Int64(1711111121111),
+	})
+	if err != nil {
+		t.Fatalf("marshal eou event: %v", err)
+	}
+	assertJSONEq(t, mustReadFixture(t, "eou.json"), data)
+}
+
 func TestMarshalErrorEvent(t *testing.T) {
 	data, err := wsinbound.MarshalEvent(wsproto.EventEnvelope{
 		Event:     compat.EventError,
